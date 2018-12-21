@@ -9,8 +9,8 @@ define PROJECT_ENV
 		                         {certfile,   "/etc/ssl/rmq/server_certificate.pem"},
 				                     {keyfile,    "/etc/ssl/rmq/server_key.pem"}]}
 								 ]},
-	{handlers,[{handler1, []},
-						 {handler2, []}
+	{handlers,[{handler1, [{type, sync}]},
+						 {handler2, [{type, async}]}
 
 		]}
 ]

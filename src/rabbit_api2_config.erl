@@ -31,11 +31,26 @@ parse(Name,Config)->
 %%%-------------------------------------------------------------------
 %%% Parse Functions
 %%%-------------------------------------------------------------------
-parse_current(Name, _Config) when is_atom(Name) ->
-    {ok, #worker{name=Name}};
+parse_current(Name, Config) when is_atom(Name) ->
+    {type, Type0} = proplists:lookup(type, Config),
+    Type = validate_parameter(type,
+                              fun validate_allowed_value/1,
+                              {Type0, [sync, async]}),
+    Source = case Type of
+                 sync ->
+                     Source0 = proplists:get_value(source, Config),
+                     parse_source(Source0);
+                 async ->
+                     undefined
+             end,
+    {ok, #worker{name=Name,
+                 src_config=Source}};
 parse_current(_, _) ->
     throw({handler_name_is_not_atom}).
 
+parse_source(_SrcConfig)->
+    io:format("~n~p~n",[_SrcConfig]),
+    none.
 %%%-------------------------------------------------------------------
 %%% Validate Functions
 %%%-------------------------------------------------------------------
@@ -66,3 +81,19 @@ duplicate_keys(PropList) when is_list(PropList) ->
     proplists:get_keys(
       lists:foldl(fun (K, L) -> lists:keydelete(K, 1, L) end, PropList,
                   proplists:get_keys(PropList))).
+
+validate_parameter(Param, Fun, Value) ->
+    try
+        Fun(Value)
+    catch
+        _:{error, Err} ->
+            throw({error,{invalid_parameter_value, Param, Err}})
+    end.
+
+validate_allowed_value({Value, List}) ->
+    case lists:member(Value, List) of
+        true ->
+            Value;
+        false ->
+            throw({error, {waiting_for_one_of,List}})
+    end.
