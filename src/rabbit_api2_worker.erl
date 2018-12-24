@@ -37,8 +37,8 @@
 %% Starts the server
 %% @end
 %%--------------------------------------------------------------------
-start_link(Config=#worker{}) ->
-    gen_server2:start_link({local, Config#worker.name}, ?MODULE, [Config], []).
+start_link(Config=#{name:=Name}) ->
+    gen_server2:start_link({local, Name}, ?MODULE, [Config], []).
 
 %%%===================================================================
 %%% gen_server callbacks
@@ -50,10 +50,10 @@ start_link(Config=#worker{}) ->
 %% Initializes the server
 %% @end
 %%--------------------------------------------------------------------
-init([Config]) ->
+init([Config=#{name:=Name}]) ->
     io:format("~n~p ~n~p~n",[Config, self()]),
     process_flag(trap_exit, true),
-    {ok, #state{name=Config#worker.name}}.
+    {ok, #state{name=Name}}.
 
 
 handle_call(_Request, _From, State) ->

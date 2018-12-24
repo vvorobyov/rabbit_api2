@@ -10,7 +10,7 @@
 
 start(_Type, _Args) ->
     start_configure_listener(),
-    rabbit_api2_sup:start_link().
+    rabbit_api2_sup_sup:start_link().
 
 stop(_State) ->
 	ok.
@@ -70,14 +70,16 @@ register_context(ContextName, Listener0) ->
     %% include default port if it's not provided in the config
     %% as Cowboy won't start if the port is missing
     M1 = maps:merge(#{port => ?DEFAULT_PORT}, M0),
-    Router = [{'_',[{"/[...]", rabbit_api2_h,[]}]}],
+    Router = [{'_',[{"/api2/", rabbit_api2_h,[]},
+                    {"/api2/test/[...]", rabbit_api2_h,[]}
+                   ]}],
     Dispatch = cowboy_router:compile(Router),
     rabbit_web_dispatch:register_context_handler( % Return {ok,""}
       ContextName, % Name
       maps:to_list(M1), % Listener
-      "", % Prefix
+      "api2", % Prefix
       Dispatch, % cowboy routers
-      "RabbitMQ api2" % LinkText
+      "RabbitMQ api2 Plugin" % LinkText
      ).
 
 is_tls(Listener) ->

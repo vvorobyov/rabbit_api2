@@ -7,10 +7,27 @@ define PROJECT_ENV
 [ {ssl_config, [ {port, 8443},
 								 {ssl_opts, [{cacertfile, "/etc/ssl/rmq/ca_certificate.pem"},
 		                         {certfile,   "/etc/ssl/rmq/server_certificate.pem"},
-				                     {keyfile,    "/etc/ssl/rmq/server_key.pem"}]}
+				                     {keyfile,    "/etc/ssl/rmq/server_key.pem"}]},
+								 {cowboy_opts, [{idle_timeout,      120000},
+                                {inactivity_timeout,120000},
+                                {request_timeout,   120000}]}
 								 ]},
-	{handlers,[{handler1, [{type, sync}]},
-						 {handler2, [{type, async}]}
+	{prefix, "api2"},
+	{handlers,[{handler1, [{type, sync},
+												 {handle, "/api2/handle1"},
+												 {methods, [get]},
+												 {authorization, ["rabbitmq_auth"]},
+												 {destination, [{uris,["amqps://test:test@10.232.5.11/%2f",
+																							 "amqps://test:test@10.232.5.12/test"]},
+																				{exchange, <<"test">>},
+																				{routing_key, <<"test.rt">>}]},
+												 {source, []}]},
+						 {handler2, [{type, async},
+												 {handle, "api2/handle2"},
+												 {destination, [{uris,["amqp://test:test@10.232.5.11/%2f"]},
+																				{exchange, <<"test">>},
+																				{routing_key, <<"test.rt">>}]}
+												]}
 
 		]}
 ]
@@ -20,7 +37,7 @@ define PROJECT_APP_EXTRA_KEYS
 		{broker_version_requirements, []}
 endef
 
-DEPS = rabbit_common rabbit amqp_client cowboy cowlib rabbitmq_web_dispatch
+DEPS = rabbit_common rabbit amqp_client cowboy cowlib rabbitmq_web_dispatch rabbitmq_management
 TEST_DEPS = rabbitmq_ct_helpers rabbitmq_ct_client_helpers rabbitmq_amqp1_0
 LOCAL_DEPS += mnesia ranch ssl crypto public_key
 
