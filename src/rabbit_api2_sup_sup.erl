@@ -10,6 +10,14 @@
 
 -behaviour(supervisor2).
 
+-define(COWBOY_SPEC(CONFIG),
+        {rabbit_api2_cowboy_worker,
+         {rabbit_api2_cowboy_worker, start_link, [CONFIG]},
+         permanent,
+         16#ffffffff,
+         worker,
+         [rabbit_api2_cowboy_worker]}).
+
 %% API
 -export([start_link/0]).
 
@@ -34,17 +42,25 @@ start_link() ->
 %%%===================================================================
 init([Configuration]) ->
     SupFlags = {one_for_one, 5 ,2},
-    WorkerSupSpec = {rabbit_api2_sup,
-                     {rabbit_api2_sup, start_link,[Configuration]},
+    WorkerSupSpec = {rabbit_api2_worker_sup,
+                     {rabbit_api2_worker_sup, start_link,[Configuration]},
                      permanent,
                      16#ffffffff,
                      supervisor,
-                     [rabbit_api2_sup]},
-    {ok, {SupFlags, [WorkerSupSpec]}}.
+                     [rabbit_api2_worker_sup]},
+    CowboySpec = make_cowboy_spec(Configuration),
+    {ok, {SupFlags, [WorkerSupSpec, CowboySpec]}}.
 
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
+make_cowboy_spec(Configuration0)->
+    Fun = fun(Name, #{handle_config:=Config0, name:=Name, type:=Type}, AccIn) ->
+                  AccIn#{Name => Config0#{name=>Name, type=>Type}}
+          end,
+    Configuration = maps:fold(Fun, #{}, Configuration0),
+    ?COWBOY_SPEC(Configuration).
+
 parse_configuration(undefined) ->
     {ok, #{}};
 parse_configuration({ok, Env}) ->

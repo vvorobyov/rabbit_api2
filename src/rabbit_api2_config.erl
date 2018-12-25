@@ -47,6 +47,7 @@ parse_current(Name, Config) when is_atom(Name) ->
              end,
     Handle = parse_handle(Config),
     {ok, #{name => Name,
+           type => Type,
            handle_config => Handle,
            source_config => Source,
            destination_config => Dest}};

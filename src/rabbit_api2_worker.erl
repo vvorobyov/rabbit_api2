@@ -13,49 +13,41 @@
 -include("rabbit_api2.hrl").
 %% API
 -export([start_link/1]).
-
+-export([request/2]).
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
          terminate/2, code_change/3, format_status/2]).
 
 -define(SERVER, ?MODULE).
 
--record(state, {name,
-                dst_conn,
-                src_conn,
-                publish_ch,
-                consume_ch,
-                src_config,
-                dst_conig}).
+%% -record(state, {name,
+%%                 dst_conn,
+%%                 src_conn,
+%%                 publish_ch,
+%%                 consume_ch,
+%%                 src_config,
+%%                 dst_conig}).
 
 %%%===================================================================
 %%% API
 %%%===================================================================
 
-%%--------------------------------------------------------------------
-%% @doc
-%% Starts the server
-%% @end
-%%--------------------------------------------------------------------
 start_link(Config=#{name:=Name}) ->
-    gen_server2:start_link({local, Name}, ?MODULE, [Config], []).
+    gen_server2:start_link({global, Name}, ?MODULE, [Config], []).
 
+request(Pid, Request)->
+    gen_server:call(Pid,{request, Request}).
 %%%===================================================================
 %%% gen_server callbacks
 %%%===================================================================
 
-%%--------------------------------------------------------------------
-%% @private
-%% @doc
-%% Initializes the server
-%% @end
-%%--------------------------------------------------------------------
-init([Config=#{name:=Name}]) ->
+init([Config]) ->
     io:format("~n~p ~n~p~n",[Config, self()]),
     process_flag(trap_exit, true),
-    {ok, #state{name=Name}}.
+    {ok, Config}.
 
-
+handle_call({request, _Request}, _From, State) ->
+    {reply, io_lib:format("~p",[State]),State};
 handle_call(_Request, _From, State) ->
     Reply = ok,
     {reply, Reply, State}.
