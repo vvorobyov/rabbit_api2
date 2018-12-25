@@ -4,7 +4,7 @@ PROJECT_VERSION = 0.0.0
 PROJECT_MOD = rabbit_api2_app
 
 define PROJECT_ENV
-[ {ssl_config, [ {port, 8443},
+[ {tcp_config, [ {port, 8443},
 								 {ssl_opts, [{cacertfile, "/etc/ssl/rmq/ca_certificate.pem"},
 		                         {certfile,   "/etc/ssl/rmq/server_certificate.pem"},
 				                     {keyfile,    "/etc/ssl/rmq/server_key.pem"}]},
