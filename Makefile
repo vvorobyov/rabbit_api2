@@ -1,4 +1,4 @@
-PROJECT = rabbit_api2
+PROJECT = rabbitmq_api2
 PROJECT_DESCRIPTION = API v2.0 plugin for RabbitMQ
 PROJECT_VERSION = 0.0.0
 PROJECT_MOD = rabbit_api2_app
@@ -12,9 +12,9 @@ define PROJECT_ENV
                                 {inactivity_timeout,120000},
                                 {request_timeout,   120000}]}
 								 ]},
-	{prefix, "/api/test/"},
+	{prefix, "/api/"},
 	{handlers,[{handler1, [{type, sync},
-												 {handle, "/api2/handle1"},
+												 {handle, "handle1"},
 												 {methods, [get]},
 												 {authorization, ["179988ddc329fd90a420bc1a5835d3f7",
 																					"1899e39494676f218922307bd8f43417"]},
@@ -24,7 +24,7 @@ define PROJECT_ENV
 																				{routing_key, <<"test.rt">>}]},
 												 {source, []}]},
 						 {handler2, [{type, async},
-												 {handle, "api2/handle2"},
+												 {handle, "handle2"},
 												 {destination, [{uris,["amqp://test:test@10.232.5.11/%2f"]},
 																				{exchange, <<"test">>},
 																				{routing_key, <<"test.rt">>}]}

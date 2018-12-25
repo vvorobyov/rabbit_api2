@@ -63,8 +63,9 @@ parse_handle(Config)->
     ok = validate_parameter(handle,
                             fun valid_string/1,
                             Handle),
-    Methods = proplists:get_value(methods, Config, [post]),
-    ok = validate_http_methods(Methods),
+    Methods0 = proplists:get_value(methods, Config, [post]),
+    ok = validate_http_methods(Methods0),
+    Methods = parse_methods(Methods0),
     Authorization = proplists:get_value(authorization, Config, rabbitmq_auth),
     ok = validate_authorizations(Authorization),
     ContentType = proplists:get_value(content_type, Config, "application/json"),
@@ -72,7 +73,7 @@ parse_handle(Config)->
                             fun valid_allowed_value/1,
                            {ContentType,["application/json"]}),
     #{handle => Handle,
-      method => Methods,
+      methods => Methods,
       auth => Authorization,
       content_type => ContentType}.
 
@@ -94,6 +95,16 @@ parse_destination(DstConfig)->
           exchange => Exchange,
           routing_key => RoutingKey}}.
 
+parse_methods(Methods)->
+    Fun = fun(Method, AccIn)->
+                  case Method of
+                      get -> [<<"GET">>|AccIn];
+                      post -> [<<"POST">>|AccIn];
+                      put -> [<<"PUT">>|AccIn];
+                      delete -> [<<"DELETE">>|AccIn]
+                  end
+          end,
+    lists:foldl(Fun,[],Methods).
 
 %%%-------------------------------------------------------------------
 %%% Validate Functions

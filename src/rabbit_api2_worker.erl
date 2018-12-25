@@ -13,7 +13,7 @@
 -include("rabbit_api2.hrl").
 %% API
 -export([start_link/1]).
--export([request/2]).
+-export([request/2, auth/2]).
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
          terminate/2, code_change/3, format_status/2]).
@@ -37,6 +37,8 @@ start_link(Config=#{name:=Name}) ->
 
 request(Pid, Request)->
     gen_server:call(Pid,{request, Request}).
+auth(_Pid, {_,_})->
+    true.
 %%%===================================================================
 %%% gen_server callbacks
 %%%===================================================================

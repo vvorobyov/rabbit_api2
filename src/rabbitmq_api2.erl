@@ -6,7 +6,7 @@
 %%% @end
 %%% Created : 25 Dec 2018 by Vladislav Vorobyov <vlad@erldev>
 %%%-------------------------------------------------------------------
--module(rabbit_api2).
+-module(rabbitmq_api2).
 
 %% API
 -export([gen_hash/2]).
