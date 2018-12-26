@@ -9,8 +9,10 @@
 -module(rabbit_api2_utils).
 
 %% API
--export([gen_hash/2]).
-
+-export([gen_hash/2, is_authorized/2, forbidden/2, get_body/2,
+        get_user_name/1, get_headers/1]).
+%%-include_lib("amqp_client/include/amqp_client.hrl").
+-include_lib("rabbit_common/include/rabbit.hrl").
 %%%===================================================================
 %%% API
 %%%===================================================================
@@ -30,6 +32,101 @@ gen_hash(Username, Password)
 gen_hash(Username,Password) ->
     throw({error,requare_list_or_binary,{Username,Password}}).
 
+is_authorized(Req, State=#{auth:=Auth})->
+    case cowboy_req:parse_header(<<"authorization">>, Req) of
+        {basic, Username, Password} ->
+            case Auth of
+                rabbitmq_auth ->
+                    rabbit_auth(Username,Password, Req, State);
+                List when is_list(List) ->
+                    api2_auth(Username, Password, Req, State)
+            end;
+        _ -> {{false,<<"Basic realm=\"cowboy\"">>}, Req, State}
+    end.
+forbidden(Req,State=#{auth:=rabbitmq_auth,
+                      username :=User,
+                      dst := {DstVHost, Exchange},
+                      src := SrcRes0}) ->
+    Socket = authz_socket_info(Req),
+    DstVHostAccess = (catch rabbit_access_control:check_vhost_access(
+                              User, DstVHost, Socket)),
+    DstRes = #resource{virtual_host=DstVHost,
+                       kind = exchange,
+                       name=Exchange},
+    DstAccess = (catch rabbit_access_control:check_resource_access(
+                         User, DstRes,write)),
+    {SrcVHostAccess, SrcAccess} =
+        case SrcRes0 of
+            undefined -> {ok, ok};
+            {SrcVHost, Queue} ->
+                SrcRes = #resource{virtual_host=SrcVHost,
+                                   kind = queue,
+                                   name=Queue},
+                {(catch rabbit_access_control:check_vhost_access(
+                          User, SrcVHost, Socket)),
+                 (catch rabbit_access_control:check_resource_access(
+                          User, SrcRes, read))}
+        end,
+    case {DstVHostAccess, DstAccess, SrcVHostAccess, SrcAccess} of
+        {ok, ok, ok, ok} -> {false, Req, State};
+        _ ->  {true, Req, State}
+    end;
+forbidden(Req,State)->
+    {false, Req, State}.
+
+get_body(Req=#{method:=<<"GET">>}, _)->
+    PListQs = cowboy_req:parse_qs(Req),
+    Keys = proplists:get_keys(PListQs),
+    UKeys0 = lists:foldl(fun(Item,Acc)->
+                                case lists:member(Item,Acc) of
+                                    true -> Acc;
+                                    false  -> [Item|Acc]
+                                end
+                         end, [], Keys),
+    UKeys = [binary_to_atom(K,unicode)|| K <- UKeys0],
+    QsMap = cowboy_req:match_qs(UKeys, Req),
+    {ok, jsx:encode(QsMap), Req};
+get_body(Req, #{max_body_len:=Len}) ->
+    {ok, _, _} = cowboy_req:read_body(Req, #{length=>Len}).
+
+get_user_name(Req)->
+    {basic, UserName, _} = cowboy_req:parse_header(<<"authorization">>, Req),
+    {ok, UserName}.
+
+get_headers(Req)->
+    AllHeaders = cowboy_req:headers(Req),
+    ClearHeaders = clear_headers(AllHeaders),
+    {ok, ClearHeaders}.
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
+clear_headers(Headers)->
+    H1 = maps:remove(<<"cookie">>, Headers),
+    H2 = maps:remove(<<"connection">>, H1),
+    H3 = maps:remove(<<"authorization">>, H2),
+    H3.
+
+rabbit_auth(Username,Password, Req, State)->
+    RMQAuth = rabbit_access_control:check_user_pass_login(Username,Password),
+    case RMQAuth of
+        {ok, User} ->
+            {true, Req, State#{username =>User}};
+         _ ->
+            {{false,<<"Basic realm=\"cowboy\"">>}, Req, State}
+        end.
+
+api2_auth(Username, Password, Req, State=#{auth:=Auth})->
+    case lists:member(
+           rabbit_api2_utils:gen_hash(Username,Password),
+           Auth) of
+        true ->
+            {true, Req, State#{username=>Username}};
+        false -> {{false,<<"Basic realm=\"cowboy\"">> }, Req, State}
+    end.
+
+authz_socket_info(ReqData) ->
+    Host = cowboy_req:host(ReqData),
+    Port = cowboy_req:port(ReqData),
+    Peer = cowboy_req:peer(ReqData),
+    #authz_socket_info{ sockname = {Host, Port},
+                        peername = Peer}.

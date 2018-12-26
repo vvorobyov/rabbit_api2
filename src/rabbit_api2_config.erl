@@ -37,18 +37,26 @@ parse_current(Name, Config) when is_atom(Name) ->
                             fun valid_allowed_value/1,
                             {Type, [sync, async]}),
     {destination, Dest0} = proplists:lookup(destination, Config),
-    {ok,Dest} = parse_destination(Dest0),
-    Source = case Type of
-                 sync ->
-                     Source0 = proplists:get_value(source, Config),
-                     parse_source(Source0);
-                 async ->
-                     undefined
-             end,
+    {ok,Dest} = {ok,#{vhost := DstVHost,
+                 exchange:= Exchange}} = parse_destination(Dest0),
+    {ok, Source} = case Type of
+                       sync ->
+                           Source0 = proplists:get_value(source, Config),
+                           parse_source(Source0);
+                       async ->
+                           {ok, undefined}
+                   end,
+    HndSrc = case Source of
+              #{vhost:=SrcVHost, queue:=Queue} ->
+                  {SrcVHost, Queue};
+              Value ->
+                  Value
+          end,
     Handle = parse_handle(Config),
     {ok, #{name => Name,
            type => Type,
-           handle_config => Handle,
+           handle_config => Handle#{dst =>{DstVHost, Exchange},
+                                    src =>HndSrc},
            source_config => Source,
            destination_config => Dest}};
 parse_current(_, _) ->
@@ -57,7 +65,19 @@ parse_current(_, _) ->
 parse_source(undefined)->
     throw({error, undefined_source_config_to_sync_handler});
 parse_source(SrcConfig)->
-    SrcConfig.
+    validate(SrcConfig),
+    {vhost, VHost} = proplists:lookup(vhost, SrcConfig),
+    ok = validate_parameter('source.vhost',
+                            fun valid_binary/1,
+                            VHost),
+    ok = validate_vhost(VHost),
+    {queue, Queue} = proplists:lookup(queue, SrcConfig),
+    ok = validate_parameter('queue',
+                            fun valid_binary/1,
+                            Queue),
+    {ok, #{vhost => VHost,
+           queue=>Queue}}.
+
 parse_handle(Config)->
     {handle, Handle} = proplists:lookup(handle, Config),
     ok = validate_parameter(handle,
@@ -79,10 +99,11 @@ parse_handle(Config)->
 
 parse_destination(DstConfig)->
     validate(DstConfig),
-    {uris, URIs} = proplists:lookup(uris, DstConfig),
-    ok = validate_parameter('destination.uris',
-                            fun valid_ampq_uris/1,
-                            URIs),
+    {vhost, VHost} = proplists:lookup(vhost, DstConfig),
+    ok = validate_parameter('destination.vhost',
+                            fun valid_binary/1,
+                            VHost),
+    ok = validate_vhost(VHost),
     {exchange, Exchange} = proplists:lookup(exchange, DstConfig),
     ok = validate_parameter(exchange,
                             fun valid_binary/1,
@@ -91,7 +112,7 @@ parse_destination(DstConfig)->
     ok = validate_parameter(routing_key,
                             fun valid_binary/1,
                             RoutingKey),
-    {ok,#{uris => URIs,
+    {ok,#{vhost => VHost,
           exchange => Exchange,
           routing_key => RoutingKey}}.
 
@@ -152,6 +173,15 @@ validate_authorizations(Other) ->
     throw({error, {requare_list_hashes_or_rabbitmq_auth_atom,
                    {authorization,Other}}}).
 
+validate_vhost(VHost)->
+    io:format("~nVHosts: ~p~n", [rabbit_vhost:list()]),
+    case rabbit_vhost:exists(VHost) of
+        true ->
+            ok;
+        false ->
+            throw({error, {vhost_not_exists,VHost}})
+    end.
+
 validate_http_methods(Methods)
   when is_list(Methods)->
     Fun = fun(Method)->
@@ -181,20 +211,6 @@ valid_allowed_value({Value, List}) ->
         false ->
             throw({error, {waiting_for_one_of,Value, List}})
     end.
-
-valid_ampq_uris([])->
-    throw({error, list_of_uris_is_empty});
-valid_ampq_uris(URIs) when is_list(URIs)->
-    Fun = fun (URI) ->
-                  case catch(amqp_uri:parse(URI)) of
-                      {ok, _} -> ok;
-                      Error ->
-                          throw(Error)
-                  end
-          end,
-    lists:map(Fun, URIs);
-valid_ampq_uris(Other)->
-    throw({error, {requare_list, Other}}).
 
 valid_binary(V) when is_binary(V) ->
     V;
