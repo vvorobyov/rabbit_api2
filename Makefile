@@ -4,33 +4,34 @@ PROJECT_VERSION = 0.0.0
 PROJECT_MOD = rabbit_api2_app
 
 define PROJECT_ENV
-[ {tcp_config, [ {port, 8443},
-								 {ssl_opts, [{cacertfile, "/etc/ssl/rmq/ca_certificate.pem"},
-		                         {certfile,   "/etc/ssl/rmq/server_certificate.pem"},
-				                     {keyfile,    "/etc/ssl/rmq/server_key.pem"}]},
-								 {cowboy_opts, [{idle_timeout,      120000},
-                                {inactivity_timeout,120000},
-                                {request_timeout,   120000}]}
-								 ]},
-	{prefix, "/api/"},
-	{handlers,[{handler1, [{type, sync},
-												 {handle, "handle1"},
-												 {methods, [get]},
-												 {authorization, rabbitmq_auth},
-												 {destination, [{vhost,<<"/">>},
-																				{exchange, <<"test">>},
-																				{routing_key, <<"test.rt">>}]},
-												 {source, [{vhost,<<"/">>},
-																	 {queue, <<"test">>}]}]},
-						 {handler2, [{type, async},
-												 {handle, "handle2"},
-												 {methods, [get, post]},
-												 {destination, [{vhost,<<"/">>},
-																				{exchange, <<"test">>},
-																				{routing_key, <<"test.rt">>}]}
-												]}
+[	{default,[{prefix, "api/v2"},
+						{methods, [post]},
+						{authorization, rabbitmq_auth},
+						{content_type, <<"application/json">>},
+						{vhost, <<"/">>},
+						{async_response, none},
+						{max_body_length, 131072},
+						{delivery_mode, 1},
+						{user_id, none},
+						{app_id, none},
+						{handlers, []}
+	]},
+	{allowed, [{methods, [get, post, put, delete]},
+						 {type, [sync, async]},
+						 {content_type, [<<"application/json">>]},
+						 {delivery_mode, [1, 2]}
+	]},
+	{handlers,[
+             {handle1,[{type, sync},
+                       {authorization, "qwefsddf"},
+                       {content_type, <<"application/json">>},
+                       {methods, [get,post, put, delete]},
+                       {handle, "handle"},
+                       {source, [{queue, <<"123">>}]},
+                       {destination, [{exchange, <<"">>},
+                                     {routing_key, <<"">>}]}]}
+	]}
 
-		]}
 ]
 endef
 

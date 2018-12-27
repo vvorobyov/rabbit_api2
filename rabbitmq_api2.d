@@ -2,7 +2,7 @@
 
 src/rabbit_api2_config.erl:: include/rabbit_api2.hrl; @touch $@
 src/rabbit_api2_cowboy_worker.erl:: include/rabbit_api2.hrl; @touch $@
-src/rabbit_api2_utils.erl:: /home/vlad/rabbit_api2/deps/rabbit_common/include/rabbit.hrl; @touch $@
+src/rabbit_api2_utils.erl:: /home/vlad/rabbit_api2/deps/amqp_client/include/amqp_client.hrl /home/vlad/rabbit_api2/deps/rabbit_common/include/rabbit.hrl /home/vlad/rabbit_api2/deps/rabbit_common/include/rabbit_framing.hrl; @touch $@
 src/rabbit_api2_worker.erl:: include/rabbit_api2.hrl; @touch $@
 src/rabbit_api2_worker_sup.erl:: include/rabbit_api2.hrl; @touch $@
 

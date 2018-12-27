@@ -9,10 +9,8 @@
 -module(rabbit_api2_utils).
 
 %% API
--export([gen_hash/2, is_authorized/2, forbidden/2, get_body/2,
-        get_user_name/1, get_headers/1]).
-%%-include_lib("amqp_client/include/amqp_client.hrl").
--include_lib("rabbit_common/include/rabbit.hrl").
+-export([gen_hash/2, is_authorized/2, forbidden/2, accept_content/2]).
+-include_lib("amqp_client/include/amqp_client.hrl").
 %%%===================================================================
 %%% API
 %%%===================================================================
@@ -74,14 +72,44 @@ forbidden(Req,State=#{auth:=rabbitmq_auth,
 forbidden(Req,State)->
     {false, Req, State}.
 
+accept_content(Req0=#{method:=Method}, State=#{name:=Name})->
+    {ok, UserName} = get_user_name(Req0),
+    {ok, Headers} = get_headers(Req0),
+    {ok, Body, Req1} = get_body(Req0, #{max_body_len=>131072}),
+    Req =
+        case {Method,jsx:is_json(Body)} of
+            {<<"GET">>, false} ->
+                cowboy_req:reply(400,#{<<"content-type">> =>
+                                           <<"application/json">>},
+                                 "{\"error\":\"not_valid_request\","
+                                 "\"description\":\"Request is not valid\"}",
+                                 Req1);
+            {_, false} ->
+                cowboy_req:reply(400,#{<<"content-type">> =>
+                                           <<"application/json">>},
+                                 "{\"error\":\"not_valid_json\","
+                                 "\"description\":\"Request is not valid JSON\"}",
+                                 Req1);
+            {_, true} ->
+                cowboy_req:reply(200,
+                                 #{<<"content-type">> => <<"application/json">>},
+                                 rabbit_api2_worker:request(
+                                   {global,Name},
+                                   {UserName, Headers, Body}),
+                                 Req1)
+        end,
+    {ok, Req, State}.
+%%%===================================================================
+%%% Internal functions
+%%%===================================================================
 get_body(Req=#{method:=<<"GET">>}, _)->
     PListQs = cowboy_req:parse_qs(Req),
     Keys = proplists:get_keys(PListQs),
     UKeys0 = lists:foldl(fun(Item,Acc)->
-                                case lists:member(Item,Acc) of
-                                    true -> Acc;
-                                    false  -> [Item|Acc]
-                                end
+                                 case lists:member(Item,Acc) of
+                                     true -> Acc;
+                                     false  -> [Item|Acc]
+                                 end
                          end, [], Keys),
     UKeys = [binary_to_atom(K,unicode)|| K <- UKeys0],
     QsMap = cowboy_req:match_qs(UKeys, Req),
@@ -97,9 +125,7 @@ get_headers(Req)->
     AllHeaders = cowboy_req:headers(Req),
     ClearHeaders = clear_headers(AllHeaders),
     {ok, ClearHeaders}.
-%%%===================================================================
-%%% Internal functions
-%%%===================================================================
+
 clear_headers(Headers)->
     H1 = maps:remove(<<"cookie">>, Headers),
     H2 = maps:remove(<<"connection">>, H1),
