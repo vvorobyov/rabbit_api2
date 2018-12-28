@@ -72,36 +72,73 @@ forbidden(Req,State=#{auth:=rabbitmq_auth,
 forbidden(Req,State)->
     {false, Req, State}.
 
-accept_content(Req0=#{method:=Method}, State=#{name:=Name})->
-    {ok, UserName} = get_user_name(Req0),
-    {ok, Headers} = get_headers(Req0),
-    {ok, Body, Req1} = get_body(Req0, #{max_body_len=>131072}),
+accept_content(Req0, State=#{name:=Name,
+                             content_type:=ContentType})->
+    {AMQPMsg, Req1} = json_to_amqp(Req0,State),
+    Response = rabbit_api2_worker:request({global,Name}, AMQPMsg),
     Req =
-        case {Method,jsx:is_json(Body)} of
-            {<<"GET">>, false} ->
-                cowboy_req:reply(400,#{<<"content-type">> =>
-                                           <<"application/json">>},
-                                 "{\"error\":\"not_valid_request\","
-                                 "\"description\":\"Request is not valid\"}",
-                                 Req1);
-            {_, false} ->
-                cowboy_req:reply(400,#{<<"content-type">> =>
-                                           <<"application/json">>},
-                                 "{\"error\":\"not_valid_json\","
-                                 "\"description\":\"Request is not valid JSON\"}",
-                                 Req1);
-            {_, true} ->
-                cowboy_req:reply(200,
-                                 #{<<"content-type">> => <<"application/json">>},
-                                 rabbit_api2_worker:request(
-                                   {global,Name},
-                                   {UserName, Headers, Body}),
-                                 Req1)
-        end,
+        %% case {Method,jsx:is_json(Body)} of
+        %%     {<<"GET">>, false} ->
+        %%         cowboy_req:reply(400,#{<<"content-type">> =>
+        %%                                    ContentType},
+        %%                          "{\"error\":\"not_valid_request\","
+        %%                          "\"description\":\"Request is not valid\"}",
+        %%                          Req1);
+        %%     {_, false} ->
+        %%         cowboy_req:reply(400,#{<<"content-type">> =>
+        %%                                    ContentType},
+        %%                          "{\"error\":\"not_valid_json\","
+        %%                          "\"description\":\"Request is not valid JSON\"}",
+        %%                          Req1);
+        %%     {_, true} ->
+        cowboy_req:reply(200,
+                         #{<<"content-type">> =>ContentType},
+                         binary_to_list(iolist_to_binary(Response)),
+                         Req1),
+        %% end,
     {ok, Req, State}.
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
+json_to_amqp(Req0,State=#{content_type:=ContentType,
+                         properties:=Properties})->
+    {ok, UserName} = get_user_name(Req0),
+    {ok, Headers} = get_headers(Req0),
+    io:format("~p~n",[Headers]),
+    {ok, Body, Req} = get_body(Req0, State),
+    DeliveryMode = maps:get(delivery_mode, Properties),
+    AppID = case maps:get(app_id, Properties) of
+                none -> undefined;
+                V -> V
+            end,
+    UserID = case maps:get(user_id, Properties) of
+                 none -> UserName;
+                 Value -> Value
+             end,
+    Props = #'P_basic'{content_type = ContentType,
+                       headers = Headers,
+                       delivery_mode = DeliveryMode,
+                       expiration = get_expiration(),
+                       message_id = get_message_id(),
+                       timestamp = get_unix_time(),
+                       type = cowboy_req:method(Req0),
+                       user_id = UserID,
+                       app_id = AppID
+                      },
+    {#amqp_msg{props = Props, payload = Body}, Req}.
+
+get_expiration()->
+    undefined.
+
+get_message_id()->
+    Ref = ref_to_list(erlang:make_ref()),
+    Hash = crypto:hash(md5, "RabbitMQ API2 "++Ref),
+    ListHash =lists:flatten([io_lib:format("~2.16.0b",[N]) || <<N>> <= Hash]),
+    list_to_binary(ListHash).
+
+get_unix_time()->
+    os:system_time(second).
+
 get_body(Req=#{method:=<<"GET">>}, _)->
     PListQs = cowboy_req:parse_qs(Req),
     Keys = proplists:get_keys(PListQs),
@@ -123,14 +160,14 @@ get_user_name(Req)->
 
 get_headers(Req)->
     AllHeaders = cowboy_req:headers(Req),
-    ClearHeaders = clear_headers(AllHeaders),
-    {ok, ClearHeaders}.
-
-clear_headers(Headers)->
-    H1 = maps:remove(<<"cookie">>, Headers),
-    H2 = maps:remove(<<"connection">>, H1),
-    H3 = maps:remove(<<"authorization">>, H2),
-    H3.
+    ClearHeaders = maps:without([<<"cookie">>,
+                                 <<"connection">>,
+                                 <<"authorization">>],AllHeaders),
+    Fun = fun(K,V,Acc)->
+                  [{K,longstr,V}|Acc]
+          end,
+    ResultHeaders = maps:fold(Fun,[], ClearHeaders),
+    {ok, [{<<"x-system">>,longstr,<<"RabbitMQ APIv2.0 Plugin">>}|ResultHeaders]}.
 
 rabbit_auth(Username,Password, Req, State)->
     RMQAuth = rabbit_access_control:check_user_pass_login(Username,Password),

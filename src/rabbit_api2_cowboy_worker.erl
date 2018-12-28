@@ -17,8 +17,6 @@
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
          terminate/2, code_change/3, format_status/2]).
 
--include("rabbit_api2.hrl").
-
 -define(SERVER, ?MODULE).
 -define(TCP_CONTEXT, rabbit_api2_tcp).
 -define(TLS_CONTEXT, rabbit_api2_tls).
@@ -41,13 +39,6 @@ start_link(Config) ->
 %%%===================================================================
 %%% gen_server callbacks
 %%%===================================================================
-
-%%--------------------------------------------------------------------
-%% @private
-%% @doc
-%% Initializes the server
-%% @end
-%%--------------------------------------------------------------------
 init(Config) ->
     process_flag(trap_exit, true),
     io:format("~nCowboy config~nConfig: ~p~n",[Config]),
@@ -139,17 +130,18 @@ has_configured_tls_listener()->
     has_configured_listener(ssl_config).
 
 has_configured_listener(Key) ->
-    case application:get_env(rabbit_api2, Key) of
-        undefined -> false;
-        _         -> true
+    case rabbit_api2_config:get_env_value(Key, proplist) of
+        none -> false;
+        []   -> false;
+        _    -> true
     end.
 
 get_tls_listener() ->
-    {ok, Listener0} = application:get_env(rabbit_api2, ssl_config),
+    Listener0 = rabbit_api2_config:get_env_value(ssl_config, proplist),
     [{ssl, true} | Listener0].
 
 get_tcp_listener() ->
-    application:get_env(rabbit_api2, tcp_config, []).
+    rabbit_api2_config:get_env_value(tcp_config, proplist).
 
 start_listener(Listener, Config) ->
     {_Type, ContextName} = case is_tls(Listener) of
@@ -157,6 +149,7 @@ start_listener(Listener, Config) ->
                               false -> {tcp, ?TCP_CONTEXT}
                           end,
     {ok, _} = register_context(ContextName, Listener, Config),
+
     %% case NeedLogStartup of
     %%     true  -> log_startup(Type, Listener);
     %%     false -> ok
@@ -164,16 +157,18 @@ start_listener(Listener, Config) ->
     ok.
 
 register_context(ContextName, Listener0, Config) ->
-    Prefix = get_prefix(),
+    Prefix0 = rabbit_api2_config:get_env_value(prefix, string),
+    Prefix = parse_prefix(Prefix0),
     M0 = maps:from_list(Listener0),
     %% include default port if it's not provided in the config
     %% as Cowboy won't start if the port is missing
-    M1 = maps:merge(#{port => ?DEFAULT_PORT}, M0),
+    DefPort = rabbit_api2_config:get_env_value(default_port, not_neg_integer),
+    M1 = maps:merge(#{port => DefPort}, M0),
     Dispatch = rabbit_api2_dispatcher:build_dispatcher(Prefix,Config),
     rabbit_web_dispatch:register_context_handler( % Return {ok,""}
       ContextName, % Name
       maps:to_list(M1), % Listener
-      Prefix, % Prefix
+      "",% Prefix, % Prefix
       Dispatch, % cowboy routers
       "RabbitMQ API2 Plugin" % LinkText
      ).
@@ -185,13 +180,6 @@ is_tls(Listener) ->
         _         -> true
     end.
 
-get_prefix()->
-    case application:get_env(prefix) of
-        {ok, Value} when is_list(Value) ->
-            parse_prefix(Value);
-        _ ->
-            "api2/v2"
-    end.
 parse_prefix(Value)->
     case {hd(Value),lists:last(Value)} of
         {$/, $/} ->

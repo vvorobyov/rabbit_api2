@@ -27,12 +27,12 @@ forbidden(Req,State)->
     rabbit_api2_utils:forbidden(Req, State).
 
 %% предоставляемые типы данных
-content_types_provided(Req, State) ->
-    {[{<<"application/json">>, accept_content}], Req, State}.
+content_types_provided(Req, State=#{content_type:=ContentType}) ->
+    {[{ContentType, accept_content}], Req, State}.
 
 %% возвращаемые типы данных
-content_types_accepted(Req, State) ->
-    {[{<<"application/json">>, accept_content}], Req, State}.
+content_types_accepted(Req, State=#{content_type:=ContentType}) ->
+    {[{ContentType, accept_content}], Req, State}.
 
 accept_content(Req, State)->
     rabbit_api2_utils:accept_content(Req,State).

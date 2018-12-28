@@ -29,6 +29,7 @@ build_dispatcher(Prefix, Config)->
 %%%===================================================================
 build_routes(Prefix, Config)->
     Dispatcher = parse_config(Prefix, Config),
+    %Notfound = [{"/[...]", rabbit_api2_notfound_h, []}],
     [{'_',Dispatcher}].
 
 parse_config(Prefix, Config)->

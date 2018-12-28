@@ -6,7 +6,7 @@ PROJECT_MOD = rabbit_api2_app
 define PROJECT_ENV
 [	{default,[{prefix, "api/v2"},
 						{methods, [post]},
-						{authorization, rabbitmq_auth},
+						{authorization, none},
 						{content_type, <<"application/json">>},
 						{vhost, <<"/">>},
 						{async_response, none},
@@ -14,23 +14,40 @@ define PROJECT_ENV
 						{delivery_mode, 1},
 						{user_id, none},
 						{app_id, none},
-						{handlers, []}
-	]},
+						{handlers, []},
+            {properties, []},
+            {reconnect_delay, 5},
+            {tcp_config, []},
+            {ssl_config, none},
+            {default_port, 5080}
+           ]},
 	{allowed, [{methods, [get, post, put, delete]},
 						 {type, [sync, async]},
 						 {content_type, [<<"application/json">>]},
 						 {delivery_mode, [1, 2]}
-	]},
-	{handlers,[
-             {handle1,[{type, sync},
-                       {authorization, "qwefsddf"},
+            ]},
+  {prefix, "api2"},
+  {tcp_config,[{port, 8080}]},
+	{ssl_config, [{port, 8443},
+                {ssl_opts, [{cacertfile, "/etc/ssl/rmq/ca_certificate.pem"},
+                            {certfile,   "/etc/ssl/rmq/server_certificate.pem"},
+                            {keyfile,    "/etc/ssl/rmq/server_key.pem"}]},
+                {cowboy_opts, [{idle_timeout,      120000},
+                               {inactivity_timeout,120000},
+                               {request_timeout,   120000}]}
+               ]},
+	{handlers,[{handle1,[{type, sync},
+                       {authorization, ["1e0a58af51ef9471c1a30773ea341392"]},
                        {content_type, <<"application/json">>},
-                       {methods, [get,post, put, delete]},
+                       {methods, [get]},
                        {handle, "handle"},
-                       {source, [{queue, <<"123">>}]},
+                       {properties,[{delivery_mode,2}]},
+                       {source, [{queue, <<"123">>},
+                                {vhost, <<"test">>}]},
                        {destination, [{exchange, <<"">>},
-                                     {routing_key, <<"">>}]}]}
-	]}
+                                      {routing_key, <<"test">>}]}
+                      ]}
+            ]}
 
 ]
 endef
