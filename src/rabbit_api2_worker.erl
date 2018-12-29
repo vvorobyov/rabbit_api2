@@ -27,7 +27,11 @@
                 publish_ch,
                 consume_ch,
                 src_config,
-                dst_config}).
+                dst_config,
+                current_delivery_tag=1,
+                consumer_tag,
+                wait_ack=[],
+                wait_response=[]}).
 
 %%%===================================================================
 %%% API
@@ -52,8 +56,6 @@ init(Config=#{name:=Name,
     process_flag(trap_exit, true),
     {ok,DstConn, DstCh, SrcConn, SrcCh} =
         make_connections_and_channels(Config),
-    amqp_channel:register_return_handler(DstCh, self()),
-    amqp_channel:register_confirm_handler(DstCh, self()),
     {ok, #state{
             name=Name,
             type=Type,
@@ -64,11 +66,10 @@ init(Config=#{name:=Name,
             dst_config=DstConfig,
             src_config=SrcConfig}}.
 
-handle_call({request, Msg}, _From, State) ->
-    Request = publish_message(State#state.publish_ch,
-                              Msg,
-                              State#state.dst_config),
-    {reply, io_lib:format("~p",[Request]),State};
+handle_call({request, Msg}, From, S=#state{}) ->
+    MessageID = publish_message(
+                  S#state.publish_ch, Msg, S#state.dst_config),
+    register_wait(MessageID, From, S);
 handle_call(_Request, _From, State) ->
     Reply = ok,
     {noreply, Reply, State}.
@@ -76,12 +77,21 @@ handle_call(_Request, _From, State) ->
 handle_cast(_Request, State) ->
     {noreply, State}.
 
-%% handle_info({_,_}, State) ->
-%%     io:format("~p~n",[_Info]),
-%%     {noreply, State};
+handle_info(Info = {#'basic.return'{},#amqp_msg{}}, State) ->
+    register_return(Info, State);
+handle_info(Info = #'basic.ack'{}, State) ->
+    register_ack(Info, State);
+handle_info(Info = #'basic.nack'{}, State) ->
+    register_nack(Info, State);
+handle_info(#'basic.consume_ok'{consumer_tag=ConsTag},S) ->
+    {noreply, S#state{consumer_tag=ConsTag}};
+handle_info(Info = {#'basic.deliver'{consumer_tag=ConsTag},#amqp_msg{}},
+            S=#state{consumer_tag=ConsTag})->
+    register_response(Info, S);
 handle_info(_Info, State) ->
     io:format("~p~n",[_Info]),
     {noreply, State}.
+
 
 terminate(_Reason, _State) ->
     ok.
@@ -95,36 +105,99 @@ format_status(_Opt, Status) ->
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
+register_response({#'basic.deliver'{delivery_tag=Tag},
+                   Msg}, S=#state{consume_ch= Ch})->
+
+    amqp_channel:cast(Ch,#'basic.ack'{})
+    {noreply, S}.
+
+register_wait(MessageID, From, S)->
+    DeliveryTag = S#state.current_delivery_tag,
+    WaitAck = [{DeliveryTag, MessageID, From}|S#state.wait_ack],
+    WaitResponse =case S#state.type  of
+                      sync -> [{MessageID, From}| S#state.wait_response];
+                      async -> S#state.wait_response
+                  end,
+
+    {noreply, S#state{wait_ack=WaitAck,
+                      wait_response=WaitResponse,
+                      current_delivery_tag=DeliveryTag+1}}.
+
+register_return({#'basic.return'{reply_text=Reason},
+                 #amqp_msg{
+                   props=#'P_basic'{message_id=MessageID}}},
+                S=#state{})->
+    {_, MessageID, From} = lists:keyfind(MessageID, 2, S#state.wait_ack),
+    WaitAck = lists:keydelete(MessageID, 2, S#state.wait_ack),
+    WaitResponse = lists:keydelete(MessageID, 1, S#state.wait_response),
+    gen_server2:reply(From, {publish_error, Reason}),
+    {noreply, S#state{wait_ack = WaitAck,
+                      wait_response = WaitResponse}}.
+
+register_ack(#'basic.ack'{delivery_tag = DeliveryTag}, S)->
+    case lists:keyfind(DeliveryTag, 1, S#state.wait_ack) of
+        {DeliveryTag, _, From} ->
+            WaitAck = lists:keydelete(DeliveryTag, 1, S#state.wait_ack),
+            case S#state.type of
+                async ->
+                    gen_server2:reply(From, {publish_ok,<<"publish_ok">>});
+                sync -> ok
+            end,
+            {noreply, S#state{wait_ack = WaitAck}};
+        false -> {noreply, S}
+    end.
+
+register_nack(#'basic.nack'{delivery_tag=DeliveryTag}, S=#state{})->
+    case lists:keyfind(DeliveryTag, 1, S#state.wait_ack) of
+        {DeliveryTag, MessageID, From} ->
+            WaitAck = lists:keydelete(DeliveryTag, 1, S#state.wait_ack),
+            WaitResponse = lists:keydelete(MessageID, 1, S#state.wait_response),
+            gen_server2:reply(From, {publish_error, <<"Server Return nack">>}),
+            {noreply, S#state{wait_ack = WaitAck,
+                              wait_response = WaitResponse}};
+        false ->
+            {noreply, S}
+    end.
+
 publish_message(Channel,
-                Message=#amqp_msg{},
+                Message=#amqp_msg{props=#'P_basic'{message_id=MessageID}},
                 #{exchange:=Exchange,
                   routing_key:=RoutingKey})->
-    amqp_channel:call(Channel,
+    amqp_channel:cast(Channel,
                       #'basic.publish'{
                          exchange=Exchange,
                          mandatory=true,
                          routing_key=RoutingKey},
-                      Message).
+                      Message),
+    MessageID.
 
 make_connections_and_channels(#{type:=sync,
                                 name := Name,
                                 dst_config := #{vhost:=VHost},
-                                src_config := #{vhost:=VHost}})->
+                                src_config := SrcConf = #{vhost:=VHost}})->
     ConnName = get_connection_name(Name),
     {ok,Connection} = make_connection(ConnName, VHost),
     DstCh = make_channel(Connection),
+    amqp_channel:register_return_handler(DstCh, self()),
+    amqp_channel:cast(DstCh, #'confirm.select'{}),
+    amqp_channel:register_confirm_handler(DstCh, self()),
     SrcCh = make_channel(Connection),
+    consume(SrcCh, SrcConf),
     {ok,Connection, DstCh, Connection, SrcCh};
 make_connections_and_channels(#{type:=sync,
                                 name := Name,
                                 dst_config := #{vhost:=DstVHost},
-                                src_config := #{vhost:=SrcVHost}}) ->
+                                src_config := SrcConf = #{vhost:=SrcVHost}}) ->
     DstConnName = get_connection_name(<<"Publisher">>, Name),
     {ok, DstConn} = make_connection(DstConnName, DstVHost),
     DstCh = make_channel(DstConn),
+    amqp_channel:register_return_handler(DstCh, self()),
+    #'confirm.select_ok'{}=amqp_channel:call(DstCh, #'confirm.select'{}),
+    amqp_channel:register_confirm_handler(DstCh, self()),
     SrcConnName = get_connection_name(<<"Consumer">>, Name),
     {ok, SrcConn} = make_connection(SrcConnName, SrcVHost),
     SrcCh = make_channel(SrcConn),
+    consume(SrcCh, SrcConf),
     {ok, DstConn, DstCh, SrcConn, SrcCh};
 make_connections_and_channels(#{type:=async,
                                 name := Name,
@@ -132,6 +205,9 @@ make_connections_and_channels(#{type:=async,
     ConnName = get_connection_name(Name),
     {ok, Connection} = make_connection(ConnName, VHost),
     DstCh = make_channel(Connection),
+    amqp_channel:register_return_handler(DstCh, self()),
+    amqp_channel:cast(DstCh, #'confirm.select'{}),
+    amqp_channel:register_confirm_handler(DstCh, self()),
     {ok, Connection, DstCh, none, none}.
 
 make_connection(ConnName, VHost)->
@@ -184,4 +260,11 @@ get_connection_name(Postfix, Name)
 %% fallback
 get_connection_name(_ , _) ->
     <<"RabbitMQ APIv2.0">>.
+
+consume(Channel,#{queue := Queue,
+                  prefetch_count := PrefCount})->
+    amqp_channel:call(Channel, #'basic.qos'{prefetch_count = PrefCount}),
+    amqp_channel:subscribe(Channel,
+                           #'basic.consume'{queue = Queue},
+                           self()).
 

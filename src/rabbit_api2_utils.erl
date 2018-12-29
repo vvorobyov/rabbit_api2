@@ -75,7 +75,7 @@ forbidden(Req,State)->
 accept_content(Req0, State=#{name:=Name,
                              content_type:=ContentType})->
     {AMQPMsg, Req1} = json_to_amqp(Req0,State),
-    Response = rabbit_api2_worker:request({global,Name}, AMQPMsg),
+    {_,Response} = rabbit_api2_worker:request({global,Name}, AMQPMsg),
     Req =
         %% case {Method,jsx:is_json(Body)} of
         %%     {<<"GET">>, false} ->
@@ -93,7 +93,7 @@ accept_content(Req0, State=#{name:=Name,
         %%     {_, true} ->
         cowboy_req:reply(200,
                          #{<<"content-type">> =>ContentType},
-                         binary_to_list(iolist_to_binary(Response)),
+                         binary_to_list(Response),
                          Req1),
         %% end,
     {ok, Req, State}.

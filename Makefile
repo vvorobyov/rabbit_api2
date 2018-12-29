@@ -19,7 +19,8 @@ define PROJECT_ENV
             {reconnect_delay, 5},
             {tcp_config, []},
             {ssl_config, none},
-            {default_port, 5080}
+            {default_port, 5080},
+            {prefetch_count, 1000}
            ]},
 	{allowed, [{methods, [get, post, put, delete]},
 						 {type, [sync, async]},
@@ -42,8 +43,19 @@ define PROJECT_ENV
                        {methods, [get]},
                        {handle, "handle"},
                        {properties,[{delivery_mode,2}]},
-                       {source, [{queue, <<"123">>},
+                       {source, [{queue, <<"test">>},
                                 {vhost, <<"test">>}]},
+                       {destination, [{exchange, <<"">>},
+                                      {routing_key, <<"test">>}]}
+                      ]},
+             {handle2,[{type, async},
+                       {authorization, ["1e0a58af51ef9471c1a30773ea341392"]},
+                       {content_type, <<"application/json">>},
+                       {methods, [get]},
+                       {handle, "handle2"},
+                       {properties,[{delivery_mode,2}]},
+                       {source, [{queue, <<"123">>},
+                                 {vhost, <<"test">>}]},
                        {destination, [{exchange, <<"">>},
                                       {routing_key, <<"test">>}]}
                       ]}

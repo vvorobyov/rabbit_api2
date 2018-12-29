@@ -102,8 +102,11 @@ parse_destination(DstConfig)->
 parse_source(SrcConfig)->
     VHost = get_value(vhost, not_empty_binary, "source.", SrcConfig),
     Queue = get_value(queue, not_empty_binary, "source.", SrcConfig),
+    PrefetchCount =
+        get_value(prefetch_count, not_neg_integer, "source.", SrcConfig),
     {ok, #{vhost => VHost,
-           queue => Queue}}.
+           queue => Queue,
+           prefetch_count => PrefetchCount}}.
 
 parse_properties(Props)->
     DeliveryMode = get_value(delivery_mode, not_neg_integer, Props),
