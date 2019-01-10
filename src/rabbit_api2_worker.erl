@@ -30,8 +30,7 @@
                 dst_config,
                 current_delivery_tag=1,
                 consumer_tag,
-                wait_ack=[],
-                wait_response=[]}).
+                wait_response}).
 
 %%%===================================================================
 %%% API
@@ -54,7 +53,7 @@ init(Config=#{name:=Name,
               src_config:=SrcConfig}) ->
     io:format("~n~p ~n~p~n",[Config, self()]),
     process_flag(trap_exit, true),
-    {ok,DstConn, DstCh, SrcConn, SrcCh} =
+    {ok, DstConn, DstCh, SrcConn, SrcCh} =
         make_connections_and_channels(Config),
     {ok, #state{
             name=Name,
@@ -64,30 +63,71 @@ init(Config=#{name:=Name,
             publish_ch=DstCh,
             consume_ch=SrcCh,
             dst_config=DstConfig,
-            src_config=SrcConfig}}.
+            src_config=SrcConfig,
+            wait_response= rabbit_api2_waitlist:empty()}}.
 
 handle_call({request, Msg}, From, S=#state{}) ->
-    MessageID = publish_message(
-                  S#state.publish_ch, Msg, S#state.dst_config),
-    register_wait(MessageID, From, S);
+    MessageID = publish_message(S#state.publish_ch,
+                                Msg, S#state.dst_config),
+    NewState = append_wait(MessageID, From, S),
+    {noreply, NewState};
 handle_call(_Request, _From, State) ->
-    Reply = ok,
-    {noreply, Reply, State}.
+    {noreply, State}.
 
 handle_cast(_Request, State) ->
     {noreply, State}.
 
-handle_info(Info = {#'basic.return'{},#amqp_msg{}}, State) ->
-    register_return(Info, State);
-handle_info(Info = #'basic.ack'{}, State) ->
-    register_ack(Info, State);
-handle_info(Info = #'basic.nack'{}, State) ->
-    register_nack(Info, State);
+%% Успешная подписка на очередь
 handle_info(#'basic.consume_ok'{consumer_tag=ConsTag},S) ->
     {noreply, S#state{consumer_tag=ConsTag}};
-handle_info(Info = {#'basic.deliver'{consumer_tag=ConsTag},#amqp_msg{}},
-            S=#state{consumer_tag=ConsTag})->
-    register_response(Info, S);
+%% Ошибка маршрутизации сообщения
+handle_info({#'basic.return'{reply_text = Reason},
+             #amqp_msg{props=#'P_basic'{message_id=MessageId}}},
+            S=#state{}) ->
+    {From} = rabbit_api2_waitlist:get([from], MessageId, S#state.wait_response),
+    gen_server2:reply(From, {publish_error, Reason}),
+    NewState=delete_wait(MessageId, S),
+    {noreply, NewState};
+%% Успешная публикация сообщения
+handle_info(#'basic.ack'{delivery_tag = DeliveryTag},
+            S=#state{}) ->
+    case S#state.type of
+        sync ->
+            {noreply, S};
+        async ->
+            {From} = rabbit_api2_waitlist:get([from], DeliveryTag,
+                                              S#state.wait_response),
+            gen_server2:reply(From, {publish_ok, <<"publish_ok">>}),
+            {noreply, delete_wait(DeliveryTag, S)}
+    end;
+%% Ошибка публикации сообщения
+handle_info(#'basic.nack'{delivery_tag=DeliveryTag},
+            S=#state{wait_response=WaitList}) ->
+    {From} = rabbit_api2_waitlist:get([from], DeliveryTag, WaitList),
+    gen_server2:reply(From, {publish_error, <<"Server Return nack">>}),
+    NewState=delete_wait(DeliveryTag, S),
+    {noreply, NewState};
+handle_info({#'basic.deliver'{consumer_tag=ConsTag,
+                             delivery_tag=DeliveryTag},
+             Msg = #amqp_msg{props=#'P_basic'{correlation_id=MessageId}}},
+            S = #state{consumer_tag = ConsTag})->
+    NewState = case MessageId of
+                   undefined ->
+                       S;
+                   _ ->
+                       case rabbit_api2_waitlist:get(
+                              [from], MessageId,
+                              S#state.wait_response) of
+                           {false} ->
+                               S;
+                           {From} ->
+                               gen_server2:reply(From, {response,Msg}),
+                               delete_wait(MessageId, S)
+                       end
+               end,
+    amqp_channel:cast(S#state.consume_ch,
+                      #'basic.ack'{delivery_tag=DeliveryTag}),
+    {noreply, NewState};
 handle_info(_Info, State) ->
     io:format("~p~n",[_Info]),
     {noreply, State}.
@@ -105,59 +145,48 @@ format_status(_Opt, Status) ->
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
-register_response({#'basic.deliver'{delivery_tag=Tag},
-                   Msg}, S=#state{consume_ch= Ch})->
 
-    amqp_channel:cast(Ch,#'basic.ack'{})
-    {noreply, S}.
-
-register_wait(MessageID, From, S)->
+%%%-------------------------------------------------------------------
+%%% Change State Functions
+%%%-------------------------------------------------------------------
+append_wait(MessageID, From, S)->
     DeliveryTag = S#state.current_delivery_tag,
-    WaitAck = [{DeliveryTag, MessageID, From}|S#state.wait_ack],
-    WaitResponse =case S#state.type  of
-                      sync -> [{MessageID, From}| S#state.wait_response];
-                      async -> S#state.wait_response
-                  end,
+    WaitList = rabbit_api2_waitlist:append(
+                 {DeliveryTag, MessageID, From}, S#state.wait_response),
+    S#state{wait_response=WaitList,
+            current_delivery_tag=DeliveryTag+1}.
 
-    {noreply, S#state{wait_ack=WaitAck,
-                      wait_response=WaitResponse,
-                      current_delivery_tag=DeliveryTag+1}}.
+delete_wait(Key, S=#state{})->
+    WaitList = rabbit_api2_waitlist:delete(Key, S#state.wait_response),
+    S#state{wait_response=WaitList}.
 
-register_return({#'basic.return'{reply_text=Reason},
-                 #amqp_msg{
-                   props=#'P_basic'{message_id=MessageID}}},
-                S=#state{})->
-    {_, MessageID, From} = lists:keyfind(MessageID, 2, S#state.wait_ack),
-    WaitAck = lists:keydelete(MessageID, 2, S#state.wait_ack),
-    WaitResponse = lists:keydelete(MessageID, 1, S#state.wait_response),
-    gen_server2:reply(From, {publish_error, Reason}),
-    {noreply, S#state{wait_ack = WaitAck,
-                      wait_response = WaitResponse}}.
+%% register_response({#'basic.deliver'{delivery_tag=Tag},
+%%                    Msg}, S=#state{consume_ch= Ch})->
 
-register_ack(#'basic.ack'{delivery_tag = DeliveryTag}, S)->
-    case lists:keyfind(DeliveryTag, 1, S#state.wait_ack) of
-        {DeliveryTag, _, From} ->
-            WaitAck = lists:keydelete(DeliveryTag, 1, S#state.wait_ack),
-            case S#state.type of
-                async ->
-                    gen_server2:reply(From, {publish_ok,<<"publish_ok">>});
-                sync -> ok
-            end,
-            {noreply, S#state{wait_ack = WaitAck}};
-        false -> {noreply, S}
-    end.
+%%     amqp_channel:cast(Ch,#'basic.ack'{})
+%%     {noreply, S}.
 
-register_nack(#'basic.nack'{delivery_tag=DeliveryTag}, S=#state{})->
-    case lists:keyfind(DeliveryTag, 1, S#state.wait_ack) of
-        {DeliveryTag, MessageID, From} ->
-            WaitAck = lists:keydelete(DeliveryTag, 1, S#state.wait_ack),
-            WaitResponse = lists:keydelete(MessageID, 1, S#state.wait_response),
-            gen_server2:reply(From, {publish_error, <<"Server Return nack">>}),
-            {noreply, S#state{wait_ack = WaitAck,
-                              wait_response = WaitResponse}};
-        false ->
-            {noreply, S}
-    end.
+
+
+%% register_ack(#'basic.ack'{delivery_tag = DeliveryTag}, S)->
+%%     case S#state.type of
+%%         async ->
+%%             gen_server2:reply(From, {publish_ok,<<"publish_ok">>});
+%%         sync -> ok
+%%     end,
+%%     end.
+
+%% register_nack(#'basic.nack'{delivery_tag=DeliveryTag}, S=#state{})->
+%%     case lists:keyfind(DeliveryTag, 1, S#state.wait_ack) of
+%%         {DeliveryTag, MessageID, From} ->
+%%             WaitAck = lists:keydelete(DeliveryTag, 1, S#state.wait_ack),
+%%             WaitResponse = lists:keydelete(MessageID, 1, S#state.wait_response),
+%%             gen_server2:reply(From, {publish_error, <<"Server Return nack">>}),
+%%             {noreply, S#state{wait_ack = WaitAck,
+%%                               wait_response = WaitResponse}};
+%%         false ->
+%%             {noreply, S}
+%%     end.
 
 publish_message(Channel,
                 Message=#amqp_msg{props=#'P_basic'{message_id=MessageID}},

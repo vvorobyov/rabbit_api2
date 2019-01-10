@@ -55,7 +55,7 @@ define PROJECT_ENV
                        {handle, "handle2"},
                        {properties,[{delivery_mode,2}]},
                        {source, [{queue, <<"123">>},
-                                 {vhost, <<"test">>}]},
+                                 {vhost, <<"/">>}]},
                        {destination, [{exchange, <<"">>},
                                       {routing_key, <<"test">>}]}
                       ]}
