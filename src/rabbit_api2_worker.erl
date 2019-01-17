@@ -40,7 +40,8 @@ start_link(Config=#{name:=Name}) ->
     gen_server2:start_link({global, Name}, ?MODULE, Config, []).
 
 request(Pid, Msg=#amqp_msg{})->
-    gen_server:call(Pid,{request, Msg}).
+    io:format("~nCowboy PID: ~p~n", [self()]),
+    gen_server2:call(Pid,{request, Msg},infinity).
 auth(_Pid, {_,_})->
     true.
 %%%===================================================================
@@ -70,6 +71,7 @@ handle_call({request, Msg}, From, S=#state{}) ->
     MessageID = publish_message(S#state.publish_ch,
                                 Msg, S#state.dst_config),
     NewState = append_wait(MessageID, From, S),
+    io:format("-nProcess: ~p~n",[self()]),
     {noreply, NewState};
 handle_call(_Request, _From, State) ->
     {noreply, State}.
@@ -128,9 +130,15 @@ handle_info({#'basic.deliver'{consumer_tag=ConsTag,
     amqp_channel:cast(S#state.consume_ch,
                       #'basic.ack'{delivery_tag=DeliveryTag}),
     {noreply, NewState};
-handle_info(_Info, State) ->
-    io:format("~p~n",[_Info]),
-    {noreply, State}.
+handle_info({'DOWN', Ref, process, _Pid,_Reason}, S=#state{}) ->
+    io:format("~nBefore: ~p~n",[S#state.wait_response]),
+    NewState = delete_wait(Ref, S),
+    io:format("~nAfter: ~p~n",[NewState#state.wait_response]),
+    {noreply, NewState};
+handle_info(_Info, S) ->
+    io:format("~nUnknown message: ~p~n", [_Info]),
+    {noreply, S}.
+
 
 
 terminate(_Reason, _State) ->
@@ -149,14 +157,23 @@ format_status(_Opt, Status) ->
 %%%-------------------------------------------------------------------
 %%% Change State Functions
 %%%-------------------------------------------------------------------
-append_wait(MessageID, From, S)->
+append_wait(MessageID, From = {Pid, _}, S)->
     DeliveryTag = S#state.current_delivery_tag,
+    Ref = erlang:monitor(process, Pid),
     WaitList = rabbit_api2_waitlist:append(
-                 {DeliveryTag, MessageID, From}, S#state.wait_response),
+                 {DeliveryTag, MessageID, From, Ref},
+                 S#state.wait_response),
     S#state{wait_response=WaitList,
             current_delivery_tag=DeliveryTag+1}.
 
-delete_wait(Key, S=#state{})->
+delete_wait(Key, S=#state{})
+  when not is_reference(Key) ->
+    case rabbit_api2_waitlist:get([ref], Key, S#state.wait_response) of
+        [false] -> S;
+        [Ref] -> erlang:demonitor(Ref, [flush]),
+                 delete_wait(Key,S)
+    end;
+delete_wait(Key, S=#state{}) ->
     WaitList = rabbit_api2_waitlist:delete(Key, S#state.wait_response),
     S#state{wait_response=WaitList}.
 

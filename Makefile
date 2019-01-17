@@ -27,37 +27,37 @@ define PROJECT_ENV
 						 {content_type, [<<"application/json">>]},
 						 {delivery_mode, [1, 2]}
             ]},
-  {prefix, "api2"},
+  {prefix, "api/v2"},
   {tcp_config,[{port, 8080}]},
 	{ssl_config, [{port, 8443},
                 {ssl_opts, [{cacertfile, "/etc/ssl/rmq/ca_certificate.pem"},
                             {certfile,   "/etc/ssl/rmq/server_certificate.pem"},
                             {keyfile,    "/etc/ssl/rmq/server_key.pem"}]},
-                {cowboy_opts, [{idle_timeout,      120000},
-                               {inactivity_timeout,120000},
-                               {request_timeout,   120000}]}
+                {cowboy_opts, [{idle_timeout,      5000},
+                               {inactivity_timeout,5000},
+                               {request_timeout,   5000}]}
                ]},
 	{handlers,[{handle1,[{type, sync},
-                       {authorization, ["1e0a58af51ef9471c1a30773ea341392"]},
+                       %% {authorization, ["1e0a58af51ef9471c1a30773ea341392"]},
                        {content_type, <<"application/json">>},
                        {methods, [get]},
-                       {handle, "handle"},
+                       {handle, "sync"},
                        {properties,[{delivery_mode,2}]},
-                       {source, [{queue, <<"test">>},
+                       {source, [{queue, <<"response">>},
                                 {vhost, <<"test">>}]},
                        {destination, [{exchange, <<"">>},
-                                      {routing_key, <<"test">>}]}
+                                      {routing_key, <<"test_sync">>}]}
                       ]},
              {handle2,[{type, async},
                        {authorization, ["1e0a58af51ef9471c1a30773ea341392"]},
                        {content_type, <<"application/json">>},
                        {methods, [get]},
-                       {handle, "handle2"},
+                       {handle, "async"},
                        {properties,[{delivery_mode,2}]},
                        {source, [{queue, <<"123">>},
                                  {vhost, <<"/">>}]},
                        {destination, [{exchange, <<"">>},
-                                      {routing_key, <<"test">>}]}
+                                      {routing_key, <<"test_async">>}]}
                       ]}
             ]}
 
