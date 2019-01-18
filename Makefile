@@ -28,14 +28,19 @@ define PROJECT_ENV
 						 {delivery_mode, [1, 2]}
             ]},
   {prefix, "api/v2"},
-  {tcp_config,[{port, 8080}]},
+  {tcp_config,[{port, 8080},
+               {cowboy_opts, [{idle_timeout,      15000},
+                              {inactivity_timeout,25000},
+                              {request_timeout,   5000}]}
+
+              ]},
 	{ssl_config, [{port, 8443},
                 {ssl_opts, [{cacertfile, "/etc/ssl/rmq/ca_certificate.pem"},
                             {certfile,   "/etc/ssl/rmq/server_certificate.pem"},
                             {keyfile,    "/etc/ssl/rmq/server_key.pem"}]},
-                {cowboy_opts, [{idle_timeout,      5000},
-                               {inactivity_timeout,5000},
-                               {request_timeout,   5000}]}
+                {cowboy_opts, [{idle_timeout,      120000},
+                               {inactivity_timeout,120000},
+                               {request_timeout,   120000}]}
                ]},
 	{handlers,[{handle1,[{type, sync},
                        %% {authorization, ["1e0a58af51ef9471c1a30773ea341392"]},
@@ -44,7 +49,7 @@ define PROJECT_ENV
                        {handle, "sync"},
                        {properties,[{delivery_mode,2}]},
                        {source, [{queue, <<"response">>},
-                                {vhost, <<"test">>}]},
+                                 {vhost, <<"/">>}]},
                        {destination, [{exchange, <<"">>},
                                       {routing_key, <<"test_sync">>}]}
                       ]},
@@ -54,8 +59,7 @@ define PROJECT_ENV
                        {methods, [get]},
                        {handle, "async"},
                        {properties,[{delivery_mode,2}]},
-                       {source, [{queue, <<"123">>},
-                                 {vhost, <<"/">>}]},
+                       {source, [{queue, <<"123">>}]},
                        {destination, [{exchange, <<"">>},
                                       {routing_key, <<"test_async">>}]}
                       ]}

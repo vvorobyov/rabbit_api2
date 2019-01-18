@@ -21,10 +21,22 @@ variances(Req, Context) ->
 allowed_methods(Req, State=#{methods := Methods})->
     {Methods, Req, State}.
 
+%% Авторизация пользователя
 is_authorized(Req, State)->
-    rabbit_api2_utils:is_authorized(Req, State).
+    case rabbit_api2_utils:is_authorized(Req, State) of
+        {true, Username} ->
+            {true, Req, State#{username=>Username}};
+        false ->
+            Text1 = <<"Basic realm=\"">>,
+            Text2 = cowboy_req:host(Req),
+            Text3 = <<"\", charset=\"UTF-8\"">>,
+            WWWAuth = <<Text1/binary, Text2/binary, Text3/binary>>,
+            {{false, WWWAuth}, Req, State}
+    end.
+
+%% Порверка прав доступа
 forbidden(Req,State)->
-    rabbit_api2_utils:forbidden(Req, State).
+    {rabbit_api2_utils:forbidden(Req, State),Req, State}.
 
 %% предоставляемые типы данных
 content_types_provided(Req, State=#{content_type:=ContentType}) ->
@@ -34,5 +46,6 @@ content_types_provided(Req, State=#{content_type:=ContentType}) ->
 content_types_accepted(Req, State=#{content_type:=ContentType}) ->
     {[{ContentType, accept_content}], Req, State}.
 
+%% возвращаемый контент
 accept_content(Req, State)->
     rabbit_api2_utils:accept_content(Req,State).

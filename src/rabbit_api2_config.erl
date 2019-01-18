@@ -93,6 +93,7 @@ parse_handler(_, _) ->
 
 parse_destination(DstConfig)->
     VHost = get_value(vhost, binary, "destination.", DstConfig),
+    validate_vhost(VHost),
     Exchange = get_value(exchange, binary, "destination.", DstConfig),
     RoutingKey = get_value(routing_key, binary, "destination.", DstConfig),
     {ok,#{vhost => VHost,
@@ -101,6 +102,7 @@ parse_destination(DstConfig)->
 
 parse_source(SrcConfig)->
     VHost = get_value(vhost, not_empty_binary, "source.", SrcConfig),
+    validate_vhost(VHost),
     Queue = get_value(queue, not_empty_binary, "source.", SrcConfig),
     PrefetchCount =
         get_value(prefetch_count, not_neg_integer, "source.", SrcConfig),
@@ -247,6 +249,13 @@ validate_allowed(Value, Type, Allowed) when is_atom(Type) ->
 validate_allowed(_,_,_) ->
     false.
 
+validate_vhost(VHost)->
+    case rabbit_vhost:exists(VHost) of
+        true ->
+            ok;
+        false -> throw({error,
+                        io_lib:format("VHost '~s' not exists",[VHost])})
+    end.
 %%%-------------------------------------------------------------------
 %%% Validate types Functions
 %%%-------------------------------------------------------------------

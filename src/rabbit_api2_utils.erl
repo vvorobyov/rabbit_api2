@@ -30,21 +30,24 @@ gen_hash(Username, Password)
 gen_hash(Username,Password) ->
     throw({error,requare_list_or_binary,{Username,Password}}).
 
-is_authorized(Req, State=#{auth:=Auth})->
+%% Проверка авторизации, возвращает
+%% {true, Username}|false
+is_authorized(Req, #{auth:=Auth})->
     case cowboy_req:parse_header(<<"authorization">>, Req) of
         {basic, Username, Password} ->
             case Auth of
                 rabbitmq_auth ->
-                    rabbit_auth(Username,Password, Req, State);
+                    rabbit_auth(Username,Password);
                 List when is_list(List) ->
-                    api2_auth(Username, Password, Req, State)
+                    api2_auth(Username, Password, Auth)
             end;
-        _ -> {{false,<<"Basic realm=\"cowboy\"">>}, Req, State}
+        _ -> false
     end.
-forbidden(Req,State=#{auth:=rabbitmq_auth,
-                      username :=User,
-                      dst := {DstVHost, Exchange},
-                      src := SrcRes0}) ->
+
+forbidden(Req,#{auth:=rabbitmq_auth,
+                username :=User,
+                dst := {DstVHost, Exchange},
+                src := SrcRes0}) ->
     Socket = authz_socket_info(Req),
     DstVHostAccess = (catch rabbit_access_control:check_vhost_access(
                               User, DstVHost, Socket)),
@@ -66,28 +69,47 @@ forbidden(Req,State=#{auth:=rabbitmq_auth,
                           User, SrcRes, read))}
         end,
     case {DstVHostAccess, DstAccess, SrcVHostAccess, SrcAccess} of
-        {ok, ok, ok, ok} -> {false, Req, State};
-        _ ->  {true, Req, State}
+        {ok, ok, ok, ok} -> false;
+        _ ->  true
     end;
-forbidden(Req,State)->
-    {false, Req, State}.
+forbidden(_Req,_State)->
+    false.
 
 accept_content(Req0, State=#{name:=Name,
                              content_type:=ContentType})->
     {AMQPMsg, Req1} = json_to_amqp(Req0,State),
+    io:format("~nRequest: ~p", [erlang:localtime()]),
     Response =(catch rabbit_api2_worker:request({global,Name}, AMQPMsg)),
+    io:format("~nResponse: ~p",[erlang:localtime()]),
     Req =
         cowboy_req:reply(200,
                          #{<<"content-type">> =>ContentType},
                          binary_to_list(
                            iolist_to_binary(
-                           io_lib:format("~p",[Response]))),
+                             io_lib:format("~p",[Response]))),
                          Req1),
         %% end,
     {ok, Req, State}.
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
+rabbit_auth(Username,Password)->
+    RMQAuth = rabbit_access_control:check_user_pass_login(Username,Password),
+    case RMQAuth of
+        {ok, User} ->
+            {true, User};
+        _ ->
+            false
+    end.
+
+api2_auth(Username, Password, HashsList)->
+    case lists:member(
+           rabbit_api2_utils:gen_hash(Username,Password),
+           HashsList) of
+        true -> {true, Username};
+        false -> false
+    end.
+
 json_to_amqp(Req0,State=#{content_type:=ContentType,
                          properties:=Properties})->
     {ok, UserName} = get_user_name(Req0),
@@ -157,23 +179,6 @@ get_headers(Req)->
     ResultHeaders = maps:fold(Fun,[], ClearHeaders),
     {ok, [{<<"x-system">>,longstr,<<"RabbitMQ APIv2.0 Plugin">>}|ResultHeaders]}.
 
-rabbit_auth(Username,Password, Req, State)->
-    RMQAuth = rabbit_access_control:check_user_pass_login(Username,Password),
-    case RMQAuth of
-        {ok, User} ->
-            {true, Req, State#{username =>User}};
-         _ ->
-            {{false,<<"Basic realm=\"cowboy\"">>}, Req, State}
-        end.
-
-api2_auth(Username, Password, Req, State=#{auth:=Auth})->
-    case lists:member(
-           rabbit_api2_utils:gen_hash(Username,Password),
-           Auth) of
-        true ->
-            {true, Req, State#{username=>Username}};
-        false -> {{false,<<"Basic realm=\"cowboy\"">> }, Req, State}
-    end.
 
 authz_socket_info(ReqData) ->
     Host = cowboy_req:host(ReqData),

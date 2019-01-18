@@ -33,7 +33,6 @@
 %% @end
 %%--------------------------------------------------------------------
 start_link(Config) ->
-    start_configure_listener(Config),
     gen_server2:start_link({local, ?SERVER}, ?MODULE, Config, []).
 
 %%%===================================================================
@@ -41,7 +40,8 @@ start_link(Config) ->
 %%%===================================================================
 init(Config) ->
     process_flag(trap_exit, true),
-    io:format("~nCowboy config~nConfig: ~p~n",[Config]),
+    start_configure_listener(Config),
+    %% io:format("~nCowboy config~nConfig: ~p~n",[Config]),
     {ok, #state{}}.
 
 %%--------------------------------------------------------------------

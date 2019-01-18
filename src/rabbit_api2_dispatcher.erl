@@ -22,7 +22,7 @@
 %%--------------------------------------------------------------------
 build_dispatcher(Prefix, Config)->
     Routes = build_routes(Prefix, Config),
-    io:format("~n~p~n",[Routes]),
+    %% io:format("~n~p~n",[Routes]),
     cowboy_router:compile(Routes).
 %%%===================================================================
 %%% Internal functions
