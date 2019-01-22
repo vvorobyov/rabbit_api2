@@ -81,6 +81,7 @@ init(Config=#{name:=Name,
 
 handle_call({request, Msg}, From, S=#state{}) ->
     io:format("~nWorker PID: ~p", [self()]),
+    io:format("~nRequest: ~p",[erlang:localtime()]),
     MessageID = publish_message(S#state.publish_ch,
                                 Msg, S#state.dst_config),
     NewState = append_wait(MessageID, From, S),

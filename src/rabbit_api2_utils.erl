@@ -88,13 +88,17 @@ get_body(Req, #{max_body_len:=Len}) ->
     {ok, _, _} = cowboy_req:read_body(Req, #{length=>Len}).
 %% Запрос
 request(Method, Headers0, Body, State = #{name:=Name,
-                                         responses:=Responses})->
+                                          responses:=Responses,
+                                          content_type:=ContentType,
+                                          timeout:=TimeOut
+                                          })->
     try
-        io:format("~nHandler state: ~p", [State]),
+        validate_body(ContentType, Body),
         {ok, Headers} = make_amqp_headers(Headers0),
         {ok, Props} = make_amqp_props(Method, Headers, State),
         AMQPMsg = #amqp_msg{props = Props, payload = Body},
-        Response = rabbit_api2_worker:request({global, Name}, AMQPMsg, 10000),
+        Response = rabbit_api2_worker:request({global, Name}, AMQPMsg,
+                                              TimeOut-500),
         case Response of
             {publish_error, _} ->
                 get_response(publish_error_response, Responses);
@@ -104,9 +108,11 @@ request(Method, Headers0, Body, State = #{name:=Name,
                 parse_amqp(Msg)
         end
     catch
-        _:{timeout, _} ->
+        _:{timeout, _}    ->
             get_response(timeout_response, Responses);
-        _:_            ->
+        _: not_valid_body ->
+            get_response(bad_request_response, Responses);
+        _:_               ->
             get_response(internal_error_response, Responses)
     end.
 
@@ -116,6 +122,14 @@ request(Method, Headers0, Body, State = #{name:=Name,
 %%--------------------------------------------------------------------
 %% Request functions
 %%--------------------------------------------------------------------
+validate_body(<<"application/json">>, Body)->
+    case jsx:is_json(Body) of
+        true ->
+            ok;
+        false ->
+            throw(not_valid_body)
+    end.
+
 get_response(Key, Responses = #{}) ->
     {Status, Body} = maps:get(Key, Responses),
     {ok, Status, #{}, Body}.
@@ -143,7 +157,8 @@ get_http_status(_) ->
 
 make_amqp_props(Method, Headers, #{content_type := ContentType,
                                    properties   := Properties,
-                                   username     := UserName})->
+                                   username     := UserName,
+                                   timeout      := TimeOut})->
     DeliveryMode = maps:get(delivery_mode, Properties),
     AppID = case maps:get(app_id, Properties) of
                 none -> undefined;
@@ -154,13 +169,15 @@ make_amqp_props(Method, Headers, #{content_type := ContentType,
                  Value -> Value
              end,
     MessageId =  get_message_id(),
+    Timestamp = get_unix_time(),
+    Expiration = get_expiration(Timestamp, TimeOut),
     io:format("~nMessagwe ID: ~p", [MessageId]),
     {ok, #'P_basic'{content_type = ContentType,
                     headers = Headers,
                     delivery_mode = DeliveryMode,
-                    expiration = get_expiration(),
+                    expiration = Expiration,
                     message_id = MessageId,
-                    timestamp = get_unix_time(),
+                    timestamp = Timestamp,
                     type = Method,
                     user_id = UserID,
                     app_id = AppID
@@ -179,7 +196,7 @@ make_amqp_headers(Headers)->
            <<"RabbitMQ APIv2.0 Plugin">>}|ResultHeaders]}.
 
 
-get_expiration()->
+get_expiration(_Timestamp, _TimeOut)->
     undefined.
 
 get_message_id()->

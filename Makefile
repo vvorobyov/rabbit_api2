@@ -23,7 +23,7 @@ define PROJECT_ENV
 						{async_response, {202, <<"{\"result\":true}">>}},
             {publish_error_response, {500, <<"{\"result\":false}">>}},
             {internal_error_response, {500, <<>>}},
-            {timeout_response, {504, <<>>}},
+            {timeout_response, {504, <<"TimeOut">>}},
             {bad_request_response, {400, <<"{\"reason\":\"Request is not valid json\"}">>}}
            ]},
 	{allowed, [{methods, [get, post, put, delete]},
@@ -34,17 +34,17 @@ define PROJECT_ENV
   {prefix, "api/v2"},
   {tcp_config,[{port, 8080},
                {cowboy_opts, [{idle_timeout,      10000},
-                              {inactivity_timeout,10000},
-                              {request_timeout,   10000}]}
+                              {inactivity_timeout,20000},
+                              {request_timeout,   5000}]}
 
               ]},
 	{ssl_config, [{port, 8443},
                 {ssl_opts, [{cacertfile, "/etc/ssl/rmq/ca_certificate.pem"},
                             {certfile,   "/etc/ssl/rmq/server_certificate.pem"},
                             {keyfile,    "/etc/ssl/rmq/server_key.pem"}]},
-                {cowboy_opts, [{idle_timeout,      120000},
-                               {inactivity_timeout,120000},
-                               {request_timeout,   120000}]}
+                {cowboy_opts, [{idle_timeout,      30000},
+                               {inactivity_timeout,40000},
+                               {request_timeout,   10000}]}
                ]},
 	{handlers,[{handle1,[{type, sync},
                        %% {authorization, ["1e0a58af51ef9471c1a30773ea341392"]},

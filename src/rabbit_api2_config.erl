@@ -8,7 +8,9 @@
 %%%-------------------------------------------------------------------
 -module(rabbit_api2_config).
 %% API
--export([parse_handlers/0, get_env_value/2]).
+-export([parse_handlers/0,
+         get_env_value/2,
+         get_env_timeout/1]).
 
 %%%===================================================================
 %%% API
@@ -27,10 +29,27 @@ parse_handlers()->
 
 get_env_value(Name, Type)->
     get_value(Name, Type, application:get_all_env()).
+
+get_env_timeout(Name) when Name=:=tcp_config;Name=:=ssl_config->
+    try
+        Config = proplists:get_value(Name,application:get_all_env(), []),
+        CowboyOpts = proplists:get_value(cowboy_opts, Config, []),
+        Timeout = lists:min([proplists:get_value(idle_timeout, CowboyOpts),
+                             proplists:get_value(inactivity_timeout,
+                                                 CowboyOpts)]),
+        case Timeout of
+            Value when is_integer(Value) ->
+                Value;
+            _ -> 60000
+        end
+    catch
+        _:_ ->
+            60000
+    end.
+
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
-
 %%%-------------------------------------------------------------------
 %%% Parse Functions
 %%%-------------------------------------------------------------------

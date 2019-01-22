@@ -33,6 +33,11 @@
 %% @end
 %%--------------------------------------------------------------------
 start_link(Config) ->
+    io:format("~nTCP timeout: ~p~n",
+              [rabbit_api2_config:get_env_timeout(tcp_config)]),
+    io:format("~nTLS timeout: ~p~n",
+              [rabbit_api2_config:get_env_timeout(ssl_config)]),
+
     gen_server2:start_link({local, ?SERVER}, ?MODULE, Config, []).
 
 %%%===================================================================
@@ -112,16 +117,21 @@ start_configure_listener(Config)->
     Listeners = case {has_configured_tcp_listener(),
                       has_configured_tls_listener()} of
                     {false, false} ->
-                        [get_tcp_listener()];
+                        [{get_tcp_listener(),60000}];
                     {true, false} ->
-                        [get_tcp_listener()];
+                        [{get_tcp_listener(),
+                          rabbit_api2_config:get_env_timeout(tcp_config)}];
                     {false, true} ->
-                        [get_tls_listener()];
+                        [{get_tls_listener(),
+                          rabbit_api2_config:get_env_timeout(ssl_config)}];
                     {true, true} ->
-                        [get_tcp_listener(),
-                         get_tls_listener()]
+                        [{get_tcp_listener(),
+                          rabbit_api2_config:get_env_timeout(tcp_config)},
+                         {get_tls_listener(),
+                          rabbit_api2_config:get_env_timeout(ssl_config)}]
                 end,
-    [start_listener(Listener, Config) || Listener <- Listeners].
+    [start_listener(Listener,TimeOut, Config)
+     || {Listener,TimeOut} <- Listeners].
 
 has_configured_tcp_listener()->
     has_configured_listener(tcp_config).
@@ -143,12 +153,12 @@ get_tls_listener() ->
 get_tcp_listener() ->
     rabbit_api2_config:get_env_value(tcp_config, proplist).
 
-start_listener(Listener, Config) ->
+start_listener(Listener, TimeOut, Config) ->
     {_Type, ContextName} = case is_tls(Listener) of
                               true  -> {tls, ?TLS_CONTEXT};
                               false -> {tcp, ?TCP_CONTEXT}
                           end,
-    {ok, _} = register_context(ContextName, Listener, Config),
+    {ok, _} = register_context(ContextName, Listener,TimeOut, Config),
 
     %% case NeedLogStartup of
     %%     true  -> log_startup(Type, Listener);
@@ -156,7 +166,8 @@ start_listener(Listener, Config) ->
     %% end,
     ok.
 
-register_context(ContextName, Listener0, Config) ->
+register_context(ContextName, Listener0, TimeOut, Config) ->
+    io:format("~nListener ~p config: ~p",[ContextName, Config]),
     Prefix0 = rabbit_api2_config:get_env_value(prefix, string),
     Prefix = parse_prefix(Prefix0),
     M0 = maps:from_list(Listener0),
@@ -164,11 +175,11 @@ register_context(ContextName, Listener0, Config) ->
     %% as Cowboy won't start if the port is missing
     DefPort = rabbit_api2_config:get_env_value(default_port, not_neg_integer),
     M1 = maps:merge(#{port => DefPort}, M0),
-    Dispatch = rabbit_api2_dispatcher:build_dispatcher(Prefix,Config),
+    Dispatch = rabbit_api2_dispatcher:build_dispatcher(Prefix,TimeOut,Config),
     rabbit_web_dispatch:register_context_handler( % Return {ok,""}
       ContextName, % Name
       maps:to_list(M1), % Listener
-      "",% Prefix, % Prefix
+      "",% Prefix
       Dispatch, % cowboy routers
       "RabbitMQ API2 Plugin" % LinkText
      ).
