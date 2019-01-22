@@ -13,7 +13,7 @@
 
 %% API
 -export([start_link/1]).
--export([request/2, auth/2]).
+-export([request/3]).
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
          terminate/2, code_change/3, format_status/2]).
@@ -39,10 +39,11 @@
 start_link(Config=#{name:=Name}) ->
     gen_server2:start_link({global, Name}, ?MODULE, Config, []).
 
-request(Pid, Msg=#amqp_msg{})->
-    gen_server2:call(Pid,{request, Msg},infinity).
-auth(_Pid, {_,_})->
-    true.
+request(Pid, Msg=#amqp_msg{}, TimeOut)->
+    gen_server2:call(Pid,{request, Msg}, TimeOut).
+
+%% auth(_Pid, {_,_})->
+%%     true.
 %%%===================================================================
 %%% gen_server callbacks
 %%%===================================================================
@@ -79,6 +80,7 @@ init(Config=#{name:=Name,
     end.
 
 handle_call({request, Msg}, From, S=#state{}) ->
+    io:format("~nWorker PID: ~p", [self()]),
     MessageID = publish_message(S#state.publish_ch,
                                 Msg, S#state.dst_config),
     NewState = append_wait(MessageID, From, S),
@@ -91,7 +93,17 @@ handle_cast(_Request, State) ->
 
 %% Успешная подписка на очередь
 handle_info(#'basic.consume_ok'{consumer_tag=ConsTag},S) ->
+    io:format("~nConsum Tag: ~p", [ConsTag]),
     {noreply, S#state{consumer_tag=ConsTag}};
+%% Отписка от очереди (может возникнуть в случае удаления очереди)
+handle_info(#'basic.cancel'{consumer_tag=ConsTag},
+            S = #state{consumer_tag=ConsTag,
+                       src_config = SrcConf,
+                       consume_ch =Ch})->
+    declare(Ch, SrcConf),
+    amqp_channel:call(Ch, #'basic.cancel'{consumer_tag=ConsTag}),
+    consume(Ch, SrcConf),
+    {noreply, S};
 %% Ошибка маршрутизации сообщения
 handle_info({#'basic.return'{reply_text = Reason},
              #amqp_msg{props=#'P_basic'{message_id=MessageId}}},
@@ -103,16 +115,15 @@ handle_info({#'basic.return'{reply_text = Reason},
 %% Успешная публикация сообщения
 handle_info(#'basic.ack'{delivery_tag = DeliveryTag},
             S=#state{}) ->
-    case {S#state.type,rabbit_api2_waitlist:get([from], DeliveryTag,
-                                                S#state.wait_response)} of
+    case {S#state.type,
+          rabbit_api2_waitlist:get([from], DeliveryTag,
+                                   S#state.wait_response)} of
         {sync, _} ->
             {noreply, S};
         {async,{false}} ->
             {noreply, S};
         {async, {From}} ->
-            io:format("~n Ack From: ~p",[From]),
-            gen_server2:reply(From, {publish_ok, <<"publish_ok">>}),
-            io:format("Ack Replied"),
+            gen_server2:reply(From, {ok, publish_ok}),
             {noreply, delete_wait(DeliveryTag, S)}
     end;
 %% Ошибка публикации сообщения
@@ -121,7 +132,7 @@ handle_info(#'basic.nack'{delivery_tag=DeliveryTag},
     case rabbit_api2_waitlist:get([from], DeliveryTag, WaitList) of
         {false} -> {noreply, S};
         {From} ->
-            gen_server2:reply(From, {publish_error, <<"Server Return nack">>}),
+            gen_server2:reply(From, {publish_error, noack}),
             NewState=delete_wait(DeliveryTag, S),
             {noreply, NewState}
     end;
@@ -130,6 +141,7 @@ handle_info({#'basic.deliver'{consumer_tag=ConsTag,
                              delivery_tag=DeliveryTag},
              Msg = #amqp_msg{props=#'P_basic'{correlation_id=MessageId}}},
             S = #state{consumer_tag = ConsTag}) ->
+    io:format("~nMessage: ~p",[ DeliveryTag]),
     NewState = case MessageId of
                    undefined ->
                        S;
@@ -140,7 +152,7 @@ handle_info({#'basic.deliver'{consumer_tag=ConsTag,
                            {false} ->
                                S;
                            {From} ->
-                               gen_server2:reply(From, {response,Msg}),
+                               gen_server2:reply(From, {ok, Msg}),
                                delete_wait(MessageId, S)
                        end
                end,
@@ -186,6 +198,23 @@ handle_info({'EXIT', Conn0, _Reason},
                                           S#state.src_config),
     {noreply, S#state{dst_conn=Conn,
                       publish_ch=Ch}};
+%% Обработка закрытия канала публишера
+handle_info({'EXIT', Ch, normal},
+            S=#state{publish_ch=Ch, dst_conn=Conn}) ->
+    NewCh = make_channel(Conn),
+    amqp_channel:register_return_handler(NewCh, self()),
+    amqp_channel:cast(NewCh, #'confirm.select'{}),
+    amqp_channel:register_confirm_handler(NewCh, self()),
+    {noreply, S#state{publish_ch=NewCh}};
+
+%% Обработка закрытия канала консьюмера
+handle_info({'EXIT', Ch, normal},
+            S=#state{consume_ch = Ch, src_conn = Conn,
+                    src_config = SrcConf}) ->
+    NewCh = make_channel(Conn),
+    declare(NewCh, SrcConf),
+    consume(NewCh, SrcConf),
+    {noreply, S#state{consume_ch=NewCh}};
 
 %% Прочие сообщения
 handle_info(_Info, S) ->
@@ -247,6 +276,7 @@ make_connections_and_channels(#{type:=sync,
                                 src_config := SrcConf = #{vhost:=VHost}})->
     {ok, Connection, DstCh} = make_dst_conn_and_ch(<<>>, Name, DstConf),
     SrcCh = make_channel(Connection),
+    declare(SrcCh, SrcConf),
     consume(SrcCh, SrcConf),
     {ok,Connection, DstCh, Connection, SrcCh};
 make_connections_and_channels(#{type:=sync,
@@ -278,6 +308,7 @@ make_src_conn_and_ch(Name, SrcConf = #{vhost:=SrcVHost})->
     SrcConnName = get_connection_name(<<"Consumer">>, Name),
     {ok, SrcConn} = make_connection(SrcConnName, SrcVHost),
     SrcCh = make_channel(SrcConn),
+    declare(SrcCh, SrcConf),
     consume(SrcCh, SrcConf),
     {ok, SrcConn, SrcCh}.
 
@@ -296,6 +327,7 @@ make_connection(ConnName, VHost)->
 %% Создание канала
 make_channel(Connection)->
     {ok, Ch} = amqp_connection:open_channel(Connection),
+    link(Ch),
     Ch.
 
 %% Генерация URI для подключения
@@ -330,6 +362,9 @@ get_connection_name(Postfix, Name)
 get_connection_name(_ , _) ->
     <<"RabbitMQ APIv2.0">>.
 
+declare(Channel, #{queue:=Queue})->
+    #'queue.declare_ok'{} =
+        amqp_channel:call(Channel, #'queue.declare'{queue=Queue}).
 %% Подписка на очередь
 consume(Channel,#{queue := Queue,
                   prefetch_count := PrefCount})->
@@ -344,6 +379,7 @@ close_channels(#state{consume_ch=ConsCh, publish_ch=PubCh})->
 
 %% Закрытие канала
 close_channel(Ch) when is_pid(Ch)->
+    unlink(Ch),
     catch amqp_channel:close(Ch),
     ok;
 close_channel(_)->

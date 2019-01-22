@@ -54,7 +54,11 @@ parse_handler(Name, Config) when is_atom(Name) ->
     Methods = get_value(methods, {list,atom}, Config),
     Authorization = get_value(authorization, {list, string}, Config),
     Type = get_value(type, atom, Config),
-    AsyncResponse = get_value(async_response, string, Config),
+    AsyncResponse = get_value(async_response, response, Config),
+    PubErrResponse = get_value(publish_error_response, response, Config),
+    IntErrResponse = get_value(internal_error_response, response, Config),
+    TimeOutResponse = get_value(timeout_response, response, Config),
+    BadReqResponse = get_value(bad_request_response, response, Config),
     ContentType = get_value(content_type, binary, Config),
     MaxBodyLen = get_value(max_body_length, not_neg_integer, Config),
     Props0 = get_value(properties, proplist, Config),
@@ -72,10 +76,15 @@ parse_handler(Name, Config) when is_atom(Name) ->
             async ->
                 {ok, #{vhost=>none, queue=>none}}
         end,
+    Responses = #{async_response => AsyncResponse,
+                  publish_error_response => PubErrResponse,
+                  internal_error_response => IntErrResponse,
+                  timeout_response => TimeOutResponse,
+                  bad_request_response => BadReqResponse},
     Handler = #{handle => Handle,
                 methods => Methods,
                 auth => Authorization,
-                async_response => AsyncResponse,
+                responses => Responses,
                 max_body_length => MaxBodyLen,
                 properties => Props,
                 dst =>{DstVHost, Exchange},
@@ -129,7 +138,7 @@ get_value(Name, Type, Config)->
 get_value(Name, Type, Prefix, Config)->
     Default = get_default(Name),
     Allowed = get_allowed(Name),
-    Value0 = case {Default,proplists:get_value(Name, Config)} of
+    Value0 = case {Default, proplists:get_value(Name, Config)} of
                 {undefined,undefined} ->
                     throw({error,
                            io_lib:format("Property '~s~p' not found.",
@@ -195,6 +204,7 @@ get_validate_fun(Type)->
         string -> fun is_string/1;
         authorization -> fun is_auth/1;
         not_neg_integer -> fun is_not_neg_integer/1;
+        response -> fun is_response/1;
         _ -> false
 
     end.
@@ -323,6 +333,13 @@ is_auth2(_) ->
              " with hashes. Use ~p for generate it",
              ["rabbitmqctl eval 'rabbitmq_api2:gen_hash"
               "(USERNAME, PASSWORD).'"])}).
+
+is_response({Status, Body})
+  when is_integer(Status),
+       is_binary(Body) ->
+    true;
+is_response(_) ->
+    false.
 
 is_not_empty_binary(<<>>)->
     false;

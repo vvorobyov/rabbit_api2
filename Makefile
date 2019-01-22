@@ -9,7 +9,6 @@ define PROJECT_ENV
 						{authorization, none},
 						{content_type, <<"application/json">>},
 						{vhost, <<"/">>},
-						{async_response, none},
 						{max_body_length, 131072},
 						{delivery_mode, 1},
 						{user_id, none},
@@ -20,7 +19,12 @@ define PROJECT_ENV
             {tcp_config, []},
             {ssl_config, none},
             {default_port, 5080},
-            {prefetch_count, 1000}
+            {prefetch_count, 1000},
+						{async_response, {202, <<"{\"result\":true}">>}},
+            {publish_error_response, {500, <<"{\"result\":false}">>}},
+            {internal_error_response, {500, <<>>}},
+            {timeout_response, {504, <<>>}},
+            {bad_request_response, {400, <<"{\"reason\":\"Request is not valid json\"}">>}}
            ]},
 	{allowed, [{methods, [get, post, put, delete]},
 						 {type, [sync, async]},
@@ -29,9 +33,9 @@ define PROJECT_ENV
             ]},
   {prefix, "api/v2"},
   {tcp_config,[{port, 8080},
-               {cowboy_opts, [{idle_timeout,      15000},
-                              {inactivity_timeout,25000},
-                              {request_timeout,   5000}]}
+               {cowboy_opts, [{idle_timeout,      10000},
+                              {inactivity_timeout,10000},
+                              {request_timeout,   10000}]}
 
               ]},
 	{ssl_config, [{port, 8443},

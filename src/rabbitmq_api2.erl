@@ -9,7 +9,7 @@
 -module(rabbitmq_api2).
 
 %% API
--export([gen_hash/2]).
+-export([gen_auth_hash/2]).
 
 %%%===================================================================
 %%% API
@@ -20,8 +20,8 @@
 %% @spec
 %% @end
 %%--------------------------------------------------------------------
-gen_hash(Username,Password)->
-    rabbit_api2_utils:gen_hash(Username,Password).
+gen_auth_hash(Username,Password)->
+    rabbit_api2_utils:gen_auth_hash(Username,Password).
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
