@@ -196,8 +196,8 @@ make_amqp_headers(Headers)->
            <<"RabbitMQ APIv2.0 Plugin">>}|ResultHeaders]}.
 
 
-get_expiration(_Timestamp, _TimeOut)->
-    undefined.
+get_expiration(Timestamp, TimeOut)->
+    integer_to_binary(Timestamp+TimeOut div 1000).
 
 get_message_id()->
     Ref = ref_to_list(erlang:make_ref()),
@@ -206,7 +206,7 @@ get_message_id()->
     list_to_binary(ListHash).
 
 get_unix_time()->
-    os:system_time(second).
+    calendar:datetime_to_gregorian_seconds(calendar:local_time())-62167219200.
 
 %%--------------------------------------------------------------------
 %% Check access functions
