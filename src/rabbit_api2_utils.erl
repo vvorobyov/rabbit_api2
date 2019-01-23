@@ -16,6 +16,7 @@
          request/4]).
 -include_lib("amqp_client/include/amqp_client.hrl").
 
+
 %%%===================================================================
 %%% API
 %%%===================================================================
@@ -158,7 +159,8 @@ get_http_status(_) ->
 make_amqp_props(Method, Headers, #{content_type := ContentType,
                                    properties   := Properties,
                                    username     := UserName,
-                                   timeout      := TimeOut})->
+                                   timeout      := TimeOut,
+                                   timestamp_format := TimestampFormat})->
     DeliveryMode = maps:get(delivery_mode, Properties),
     AppID = case maps:get(app_id, Properties) of
                 none -> undefined;
@@ -169,8 +171,11 @@ make_amqp_props(Method, Headers, #{content_type := ContentType,
                  Value -> Value
              end,
     MessageId =  get_message_id(),
-    Timestamp = get_unix_time(),
-    Expiration = get_expiration(Timestamp, TimeOut),
+    Timestamp = get_unix_time(TimestampFormat),
+    Expiration = case maps:get(expiration, Properties) of
+                     infinity -> undefined;
+                     timeout-> get_expiration(Timestamp, TimeOut)
+                 end,
     io:format("~nMessagwe ID: ~p", [MessageId]),
     {ok, #'P_basic'{content_type = ContentType,
                     headers = Headers,
@@ -205,8 +210,14 @@ get_message_id()->
     ListHash =lists:flatten([io_lib:format("~2.16.0b",[N]) || <<N>> <= Hash]),
     list_to_binary(ListHash).
 
-get_unix_time()->
-    calendar:datetime_to_gregorian_seconds(calendar:local_time())-62167219200.
+get_unix_time(Format)->
+    case Format of
+        utc ->
+            os:system_time(second);
+        local ->
+            calendar:datetime_to_gregorian_seconds(
+              calendar:local_time()) - 62167219200
+    end.
 
 %%--------------------------------------------------------------------
 %% Check access functions

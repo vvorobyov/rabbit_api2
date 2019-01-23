@@ -78,6 +78,12 @@ parse_handler(Name, Config) when is_atom(Name) ->
     IntErrResponse = get_value(internal_error_response, response, Config),
     TimeOutResponse = get_value(timeout_response, response, Config),
     BadReqResponse = get_value(bad_request_response, response, Config),
+    Responses = #{async_response => AsyncResponse,
+                  publish_error_response => PubErrResponse,
+                  internal_error_response => IntErrResponse,
+                  timeout_response => TimeOutResponse,
+                  bad_request_response => BadReqResponse},
+    TimestampFormat = get_value(timestamp_format, atom, Config),
     ContentType = get_value(content_type, binary, Config),
     MaxBodyLen = get_value(max_body_length, not_neg_integer, Config),
     Props0 = get_value(properties, proplist, Config),
@@ -95,29 +101,30 @@ parse_handler(Name, Config) when is_atom(Name) ->
             async ->
                 {ok, #{vhost=>none, queue=>none}}
         end,
-    Responses = #{async_response => AsyncResponse,
-                  publish_error_response => PubErrResponse,
-                  internal_error_response => IntErrResponse,
-                  timeout_response => TimeOutResponse,
-                  bad_request_response => BadReqResponse},
+    Declarations0 = get_value(declarations, proplist, Config),
+    Declarations = parse_declarations(Declarations0),
     Handler = #{handle => Handle,
                 methods => Methods,
                 auth => Authorization,
                 responses => Responses,
+                timestamp_format => TimestampFormat,
                 max_body_length => MaxBodyLen,
                 properties => Props,
-                dst =>{DstVHost, Exchange},
-                src =>{SrcVHost, Queue},
+                dst => {DstVHost, Exchange},
+                src => {SrcVHost, Queue},
                 content_type => ContentType},
     {ok, #{name => Name,
            type => Type,
            reconnect_delay => ReconnectDelay,
            handle_config => Handler,
            src_config => Source,
-           dst_config => Dest}};
+           dst_config => Dest,
+           declarations => Declarations}};
 parse_handler(_, _) ->
     throw({error, "Handler name is not atom"}).
 
+parse_declarations(Config)->
+    Config.
 
 parse_destination(DstConfig)->
     VHost = get_value(vhost, binary, "destination.", DstConfig),
@@ -142,9 +149,11 @@ parse_properties(Props)->
     DeliveryMode = get_value(delivery_mode, not_neg_integer, Props),
     UserID = get_value(user_id, not_empty_binary, Props),
     AppID = get_value(app_id, not_empty_binary, Props),
+    Expiration = get_value(expiration, atom, Props),
     {ok, #{delivery_mode=>DeliveryMode,
            user_id=>UserID,
-           app_id=>AppID}}.
+           app_id=>AppID,
+           expiration=>Expiration}}.
 
 
 
