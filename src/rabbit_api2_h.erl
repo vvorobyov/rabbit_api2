@@ -53,11 +53,14 @@ content_types_accepted(Req, State=#{content_type:=ContentType}) ->
 
 %% возвращаемый контент
 accept_content(Req0 = #{method := Method},
-               State = #{content_type := ContentType})->
+               State = #{content_type := _ContentType})->
     Headers = cowboy_req:headers(Req0),
     {ok, ReqBody, Req1} = rabbit_api2_utils:get_body(Req0, State),
-    {ok, Status, ResHead, ResBody} =
+    _Resp={ok, _Status, _ResHead, _ResBody} =
         rabbit_api2_utils:request(Method, Headers, ReqBody, State),
-    Req = cowboy_req:reply(Status, ResHead#{<<"content-type">> => ContentType},
-                           ResBody, Req1),
+    io:format("~nresponse:~p~n",[Req1]),
+    Req = cowboy_req:reply(200, Req1),
+    %% Req = cowboy_req:reply(Status,
+    %%                        maps:merge(ResHead,#{<<"content-type">> => ContentType}),
+    %%                        ResBody, Req1),
     {ok, Req, State}.

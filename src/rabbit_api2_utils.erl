@@ -101,7 +101,8 @@ request(Method, Headers0, Body, State = #{name:=Name,
         Response = rabbit_api2_worker:request({global, Name}, AMQPMsg,
                                               TimeOut-500),
         case Response of
-            {publish_error, _} ->
+            {publish_error, Reasone} ->
+                io:format("~nError reasone ~p",[Reasone]),
                 get_response(publish_error_response, Responses);
             {ok, publish_ok} ->
                 get_response(async_response, Responses);
@@ -113,7 +114,8 @@ request(Method, Headers0, Body, State = #{name:=Name,
             get_response(timeout_response, Responses);
         _: not_valid_body ->
             get_response(bad_request_response, Responses);
-        _:_               ->
+        _:Reasone2 ->
+            io:format("~n Error reasone ~p",[Reasone2]),
             get_response(internal_error_response, Responses)
     end.
 
@@ -176,7 +178,6 @@ make_amqp_props(Method, Headers, #{content_type := ContentType,
                      infinity -> undefined;
                      timeout-> get_expiration(Timestamp, TimeOut)
                  end,
-    io:format("~nMessagwe ID: ~p", [MessageId]),
     {ok, #'P_basic'{content_type = ContentType,
                     headers = Headers,
                     delivery_mode = DeliveryMode,

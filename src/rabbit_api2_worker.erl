@@ -56,6 +56,7 @@ init(Config=#{name:=Name,
     process_flag(trap_exit, true),
     {ok, DstConn, DstCh, SrcConn, SrcCh} =
         make_connections_and_channels(Config),
+    consume(SrcCh, SrcConfig),
     io:format("~n~nWorker: ~p ~p"
               "~nPublish connection: ~p"
               "~nPublish channel: ~p"
@@ -90,6 +91,9 @@ handle_call(_Request, _From, State) ->
     {noreply, State}.
 
 handle_cast(_Request, State) ->
+
+    State#state.wait_response,
+
     {noreply, State}.
 
 %% Успешная подписка на очередь
@@ -140,9 +144,9 @@ handle_info(#'basic.nack'{delivery_tag=DeliveryTag},
 %% Получение сообщения из очереди
 handle_info({#'basic.deliver'{consumer_tag=ConsTag,
                              delivery_tag=DeliveryTag},
-             Msg = #amqp_msg{props=#'P_basic'{correlation_id=MessageId}}},
+             Msg = #amqp_msg{
+                      props=#'P_basic'{correlation_id=MessageId}}},
             S = #state{consumer_tag = ConsTag}) ->
-    io:format("~nMessage: ~p",[ DeliveryTag]),
     NewState = case MessageId of
                    undefined ->
                        S;
@@ -179,48 +183,51 @@ handle_info({'EXIT', Conn0, _Reason},
                      consume_ch=SrcCh}};
 %% Обработка завершения подключения публишера
 handle_info({'EXIT', Conn0, _Reason},
-            S=#state{dst_conn=Conn0 ,src_conn=none}) ->
-    {ok, Conn, Ch} = make_dst_conn_and_ch(<<"">>,
-                                          S#state.name,
-                                          S#state.dst_config),
+            S=#state{name=Name,
+                     type=async,
+                     dst_conn=Conn0,
+                     dst_config=#{vhost:=VHost}}) ->
+    {ok, Conn} = make_connection(<<"async">>, Name, VHost),
+    {ok, Ch} = make_publish_channel(Conn),
     {noreply, S#state{dst_conn=Conn,
                       publish_ch=Ch}};
 handle_info({'EXIT', Conn0, _Reason},
-            S=#state{dst_conn=Conn0}) ->
-    {ok, Conn, Ch} = make_dst_conn_and_ch(<<"Publisher">>,
-                                                S#state.name,
-                                                S#state.dst_config),
+            S=#state{name=Name,
+                     type=sync,
+                     dst_conn=Conn0,
+                     dst_config=#{vhost:=VHost}}) ->
+    {ok, Conn} = make_connection(<<"Publisher">>, Name, VHost),
+    {ok, Ch} = make_publish_channel(Conn),
     {noreply, S#state{dst_conn=Conn,
                       publish_ch=Ch}};
 %% Обработка завершения подключения консьюмера
 handle_info({'EXIT', Conn0, _Reason},
-            S=#state{src_conn=Conn0}) ->
-    {ok, Conn, Ch} = make_src_conn_and_ch(S#state.name,
-                                          S#state.src_config),
+            S=#state{name = Name,
+                     src_conn=Conn0,
+                     src_config=Config=#{vhost:=VHost}}) ->
+    {ok, Conn} = make_connection(<<"Consumer">>,Name, VHost),
+    {ok, Ch} = make_consume_channel(Conn),
+    consume(Ch, Config),
     {noreply, S#state{dst_conn=Conn,
                       publish_ch=Ch}};
 %% Обработка закрытия канала публишера
 handle_info({'EXIT', Ch, normal},
             S=#state{publish_ch=Ch, dst_conn=Conn}) ->
-    NewCh = make_channel(Conn),
-    amqp_channel:register_return_handler(NewCh, self()),
-    amqp_channel:cast(NewCh, #'confirm.select'{}),
-    amqp_channel:register_confirm_handler(NewCh, self()),
+    {ok, NewCh} = make_publish_channel(Conn),
     {noreply, S#state{publish_ch=NewCh}};
 
 %% Обработка закрытия канала консьюмера
 handle_info({'EXIT', Ch, normal},
             S=#state{consume_ch = Ch, src_conn = Conn,
                     src_config = SrcConf}) ->
-    NewCh = make_channel(Conn),
-    declare(NewCh, SrcConf),
+    {ok, NewCh} = make_consume_channel(Conn),
     consume(NewCh, SrcConf),
     {noreply, S#state{consume_ch=NewCh}};
-
 %% Прочие сообщения
 handle_info(_Info, S) ->
     io:format("~nUnknown message: ~p",[_Info]),
     {noreply, S}.
+
 terminate(_Reason, State) ->
     close_channels(State),
     close_connections(State),
@@ -271,51 +278,57 @@ publish_message(Channel,
                       Message),
     MessageID.
 
+
+%% Открытие подключений и каналов
 make_connections_and_channels(#{type:=sync,
                                 name := Name,
-                                dst_config := DstConf = #{vhost:=VHost},
-                                src_config := SrcConf = #{vhost:=VHost}})->
-    {ok, Connection, DstCh} = make_dst_conn_and_ch(<<>>, Name, DstConf),
-    SrcCh = make_channel(Connection),
-    declare(SrcCh, SrcConf),
-    consume(SrcCh, SrcConf),
-    {ok,Connection, DstCh, Connection, SrcCh};
+                                declarations := _Declarations,
+                                dst_config := #{vhost:=VHost},
+                                src_config := #{vhost:=VHost}})->
+    {ok, Connection} = make_connection(<<"sync">>, Name, VHost),
+    {ok, DstCh} = make_publish_channel(Connection),
+    {ok, SrcCh} = make_consume_channel(Connection),
+    {ok, Connection, DstCh, Connection, SrcCh};
 make_connections_and_channels(#{type:=sync,
                                 name := Name,
-                                dst_config := DstConf,
-                                src_config := SrcConf}) ->
-    {ok, DstConn, DstCh} = make_dst_conn_and_ch(<<"Publisher">>, Name, DstConf),
-    {ok, SrcConn, SrcCh} = make_src_conn_and_ch(Name, SrcConf),
+                                dst_config := #{vhost:=DstVHost},
+                                src_config := #{vhost:=SrcVHost}}) ->
+    {ok, DstConn} = make_connection(<<"Publisher">>, Name, DstVHost),
+    {ok, DstCh} = make_publish_channel(DstConn),
+    {ok, SrcConn} = make_connection(<<"Consumer">>, Name, SrcVHost),
+    {ok, SrcCh} = make_consume_channel(SrcConn),
     {ok, DstConn, DstCh, SrcConn, SrcCh};
 make_connections_and_channels(#{type:=async,
                                 name := Name,
-                                dst_config := DstConf}) ->
-    {ok, Connection, DstCh} = make_dst_conn_and_ch(<<>>, Name, DstConf),
+                                dst_config := #{vhost:=VHost}}) ->
+    {ok, Connection} = make_connection(<<"async">>, Name, VHost),
+    {ok, DstCh} = make_publish_channel(Connection),
     {ok, Connection, DstCh, none, none}.
 
-%% Создание канала и подключения публишера
-make_dst_conn_and_ch(Prefix, Name, #{vhost:=VHost})->
-    DstConnName = get_connection_name(Prefix, Name),
-    {ok, DstConn} = make_connection(DstConnName, VHost),
-    DstCh = make_channel(DstConn),
-    amqp_channel:register_return_handler(DstCh, self()),
-    amqp_channel:cast(DstCh, #'confirm.select'{}),
-    amqp_channel:register_confirm_handler(DstCh, self()),
-    {ok, DstConn, DstCh}.
 
 
-%% Зодание канала и подключения подписка
-make_src_conn_and_ch(Name, SrcConf = #{vhost:=SrcVHost})->
-    SrcConnName = get_connection_name(<<"Consumer">>, Name),
-    {ok, SrcConn} = make_connection(SrcConnName, SrcVHost),
-    SrcCh = make_channel(SrcConn),
-    declare(SrcCh, SrcConf),
-    consume(SrcCh, SrcConf),
-    {ok, SrcConn, SrcCh}.
 
+declare(Channel, #{queue:=Queue})->
+    #'queue.declare_ok'{} =
+        amqp_channel:call(Channel, #'queue.declare'{queue=Queue}).
+
+%% Подписка на очередь
+consume(none,_)->
+    ok;
+consume(Channel,#{queue := Queue,
+                  prefetch_count := PrefCount})->
+    amqp_channel:call(Channel, #'basic.qos'{prefetch_count = PrefCount}),
+    amqp_channel:subscribe(Channel,
+                           #'basic.consume'{queue = Queue},
+                           self()).
+
+%%%-------------------------------------------------------------------
+%%% Connection functions
+%%%-------------------------------------------------------------------
 
 %% Создание подключения
-make_connection(ConnName, VHost)->
+make_connection(Postfix, HandleName, VHost)->
+    ConnName = get_connection_name(Postfix, HandleName),
     {ok, AmqpParam} = amqp_uri:parse(get_uri(VHost)),
     case amqp_connection:start(AmqpParam, ConnName) of
         {ok, Conn} ->
@@ -324,67 +337,6 @@ make_connection(ConnName, VHost)->
         {error, Reason} ->
             throw({error,{connection_not_opened,Reason}})
     end.
-
-%% Создание канала
-make_channel(Connection)->
-    {ok, Ch} = amqp_connection:open_channel(Connection),
-    link(Ch),
-    Ch.
-
-%% Генерация URI для подключения
-get_uri(<<"/">>)->
-    "amqp:///%2f";
-get_uri(VHost) ->
-    "amqp:///"++binary_to_list(VHost).
-
-%% Функция функция формирования имени подключения на основании
-get_connection_name(<<>>, Name)
-  when is_atom(Name) ->
-    Prefix = <<"RabbitMQ APIv2.0 ">>,
-    NameAsBinary = atom_to_binary(Name, utf8),
-    <<Prefix/binary, NameAsBinary/binary>>;
-get_connection_name(<<>>, Name)
-  when is_binary(Name) ->
-    Prefix = <<"RabbitMQ APIv2.0 ">>,
-    <<Prefix/binary, Name/binary>>;
-get_connection_name(Postfix, Name)
-  when is_atom(Name) ->
-    Prefix = <<"RabbitMQ APIv2.0 ">>,
-    NameAsBinary = atom_to_binary(Name, utf8),
-    <<Prefix/binary, NameAsBinary/binary,
-      <<" (">>/binary, Postfix/binary, <<")">>/binary>>;
-%% for dynamic shovels, name is a binary
-get_connection_name(Postfix, Name)
-  when is_binary(Name) ->
-    Prefix = <<"RabbitMQ APIv2.0 ">>,
-    <<Prefix/binary, Name/binary,
-      <<" (">>/binary, Postfix/binary, <<")">>/binary>>;
-%% fallback
-get_connection_name(_ , _) ->
-    <<"RabbitMQ APIv2.0">>.
-
-declare(Channel, #{queue:=Queue})->
-    #'queue.declare_ok'{} =
-        amqp_channel:call(Channel, #'queue.declare'{queue=Queue}).
-%% Подписка на очередь
-consume(Channel,#{queue := Queue,
-                  prefetch_count := PrefCount})->
-    amqp_channel:call(Channel, #'basic.qos'{prefetch_count = PrefCount}),
-    amqp_channel:subscribe(Channel,
-                           #'basic.consume'{queue = Queue},
-                           self()).
-
-%% Закрытие каналов 
-close_channels(#state{consume_ch=ConsCh, publish_ch=PubCh})->
-    lists:foreach(fun close_channel/1, [ConsCh, PubCh]).
-
-%% Закрытие канала
-close_channel(Ch) when is_pid(Ch)->
-    unlink(Ch),
-    catch amqp_channel:close(Ch),
-    ok;
-close_channel(_)->
-    ok.
 
 %% Закрытие подключений
 close_connections(#state{dst_conn=Conn1, src_conn=Conn2})->
@@ -396,3 +348,62 @@ close_connection(Conn) when is_pid(Conn)->
     ok;
 close_connection(_) ->
     ok.
+
+%% Генерация URI для подключения
+get_uri(<<"/">>)->
+    "amqp:///%2f";
+get_uri(VHost) ->
+    "amqp:///"++binary_to_list(VHost).
+
+%% Функция функция формирования имени подключения
+get_connection_name(Postfix, Name)
+  when is_atom(Name), is_binary(Postfix) ->
+    NameAsBinary = atom_to_binary(Name, utf8),
+    get_connection_name(Postfix, NameAsBinary);
+get_connection_name(Postfix, Name)
+  when is_binary(Name), is_binary(Postfix) ->
+    Prefix = <<"RabbitMQ APIv2.0 ">>,
+    case Postfix of
+        <<>> ->
+            <<Prefix/binary, Name/binary>>;
+        _ ->
+            <<Prefix/binary, Name/binary,
+              <<" (">>/binary, Postfix/binary, <<")">>/binary>>
+    end;
+get_connection_name(_, _) ->
+    <<"RabbitMQ APIv2.0">>.
+
+%%%-------------------------------------------------------------------
+%%% Channel functions
+%%%-------------------------------------------------------------------
+
+%% Создание канала публишера
+make_publish_channel(Connection)->
+    Channel = make_channel(Connection),
+    amqp_channel:register_return_handler(Channel, self()),
+    amqp_channel:cast(Channel, #'confirm.select'{}),
+    amqp_channel:register_confirm_handler(Channel, self()),
+    {ok, Channel}.
+
+%% Создание канало консьюмера
+make_consume_channel(Connection)->
+    {ok, make_channel(Connection)}.
+
+%% Создание канала
+make_channel(Connection)->
+    {ok, Ch} = amqp_connection:open_channel(Connection),
+    link(Ch),
+    Ch.
+
+%% Закрытие каналов
+close_channels(#state{consume_ch=ConsCh, publish_ch=PubCh})->
+    lists:foreach(fun close_channel/1, [ConsCh, PubCh]).
+
+%% Закрытие канала
+close_channel(Ch) when is_pid(Ch)->
+    unlink(Ch),
+    catch amqp_channel:close(Ch),
+    ok;
+close_channel(_)->
+    ok.
+
