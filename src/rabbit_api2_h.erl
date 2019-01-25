@@ -2,25 +2,22 @@
 -behavior(cowboy_handler).
 
 -export([init/2,
-         info/3,
          variances/2,
          allowed_methods/2,
          is_authorized/2,
          accept_content/2,
          content_types_provided/2,
          forbidden/2,
-         content_types_accepted/2]).
+         content_types_accepted/2,
+        provide_content/2]).
 
 init(Req, State) ->
     %% Проработать настройки по аналогии с
     %% rabbit_mgmt_headers:set_common_permission_headers
     {cowboy_rest, Req, State}.
-info(Msg, Req, State) ->
-    io:format("~nCowboy info: ~p",[Msg]),
-    {ok, Req, State}.
 
-variances(Req, Context) ->
-    {[<<"accept-encoding">>, <<"origin">>], Req, Context}.
+variances(Req, State) ->
+    {[<<"accept-encoding">>, <<"origin">>], Req, State}.
 
 allowed_methods(Req, State=#{methods := Methods})->
     {Methods, Req, State}.
@@ -45,22 +42,34 @@ forbidden(Req,State)->
 
 %% предоставляемые типы данных
 content_types_provided(Req, State=#{content_type:=ContentType}) ->
-    {[{ContentType, accept_content}], Req, State}.
+    {[{ContentType, provide_content}], Req, State}.
 
 %% возвращаемые типы данных
 content_types_accepted(Req, State=#{content_type:=ContentType}) ->
     {[{ContentType, accept_content}], Req, State}.
-
 %% возвращаемый контент
 accept_content(Req0 = #{method := Method},
-               State = #{content_type := _ContentType})->
+               State = #{content_type := ContentType})->
+    io:format("~n~p AcceptContent",[self()]),
     Headers = cowboy_req:headers(Req0),
     {ok, ReqBody, Req1} = rabbit_api2_utils:get_body(Req0, State),
-    _Resp={ok, _Status, _ResHead, _ResBody} =
+    {ok, Status, ResHead, ResBody} =
         rabbit_api2_utils:request(Method, Headers, ReqBody, State),
-    io:format("~nresponse:~p~n",[Req1]),
-    Req = cowboy_req:reply(200, Req1),
-    %% Req = cowboy_req:reply(Status,
-    %%                        maps:merge(ResHead,#{<<"content-type">> => ContentType}),
-    %%                        ResBody, Req1),
-    {ok, Req, State}.
+    Req = cowboy_req:reply(Status,
+                           maps:merge(ResHead, #{<<"content-type">> => ContentType}),
+                           ResBody,
+                           Req1),
+    {stop, Req, State}.
+
+provide_content(Req0 = #{method := Method},
+               State = #{content_type := ContentType})->
+    io:format("~n~p ProvideContent",[self()]),
+    Headers = cowboy_req:headers(Req0),
+    {ok, ReqBody, Req1} = rabbit_api2_utils:get_body(Req0, State),
+    {ok, Status, ResHead, ResBody} =
+        rabbit_api2_utils:request(Method, Headers, ReqBody, State),
+    Req = cowboy_req:reply(Status,
+                           maps:merge(ResHead, #{<<"content-type">> => ContentType}),
+                           ResBody,
+                           Req1),
+    {stop, Req, State}.

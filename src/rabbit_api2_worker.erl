@@ -56,6 +56,14 @@ init(Config=#{name:=Name,
     process_flag(trap_exit, true),
     {ok, DstConn, DstCh, SrcConn, SrcCh} =
         make_connections_and_channels(Config),
+    case maps:find(decl_fun, DstConfig) of
+        {ok, Fun} -> Fun(DstCh);
+        _ -> ok
+    end,
+    case maps:find(decl_fun, SrcConfig) of
+        {ok, Fun2} -> Fun2(SrcCh);
+        _ -> ok
+    end,
     consume(SrcCh, SrcConfig),
     io:format("~n~nWorker: ~p ~p"
               "~nPublish connection: ~p"
@@ -78,7 +86,10 @@ init(Config=#{name:=Name,
             Error = io_lib:format("Error start '~p' with reason: ~s",[Name,
               Reason]),
             {stop, binary_to_list(iolist_to_binary(Error))}
-    end.
+    end;
+init(Conf) ->
+    io:format("~nConf: ~p", [Conf]).
+
 
 handle_call({request, Msg}, From, S=#state{}) ->
     io:format("~nWorker PID: ~p", [self()]),
@@ -96,6 +107,11 @@ handle_cast(_Request, State) ->
 
     {noreply, State}.
 
+
+%%%-------------------------------------------------------------------
+%%% Работа с подпиской
+%%%-------------------------------------------------------------------
+
 %% Успешная подписка на очередь
 handle_info(#'basic.consume_ok'{consumer_tag=ConsTag},S) ->
     io:format("~nConsum Tag: ~p", [ConsTag]),
@@ -103,12 +119,20 @@ handle_info(#'basic.consume_ok'{consumer_tag=ConsTag},S) ->
 %% Отписка от очереди (может возникнуть в случае удаления очереди)
 handle_info(#'basic.cancel'{consumer_tag=ConsTag},
             S = #state{consumer_tag=ConsTag,
-                       src_config = SrcConf,
+                       src_config = SrcConf=#{decl_fun:=DF},
                        consume_ch =Ch})->
-    declare(Ch, SrcConf),
-    amqp_channel:call(Ch, #'basic.cancel'{consumer_tag=ConsTag}),
+    io:format("~n CONSUME CANCELED: ~p",[S]),
+    DF(Ch),
+    io:format("~n QUEUE DECLARE"),
+%    amqp_channel:cast(Ch, #'basic.cancel'{consumer_tag=ConsTag}),
+    io:format("~n CONSUME CANCEL:",[]),
     consume(Ch, SrcConf),
+    io:format("~n NEW CONSUME"),
     {noreply, S};
+
+%%%-------------------------------------------------------------------
+%%% Работа с сообщениями
+%%%-------------------------------------------------------------------
 %% Ошибка маршрутизации сообщения
 handle_info({#'basic.return'{reply_text = Reason},
              #amqp_msg{props=#'P_basic'{message_id=MessageId}}},
@@ -164,11 +188,20 @@ handle_info({#'basic.deliver'{consumer_tag=ConsTag,
     amqp_channel:cast(S#state.consume_ch,
                       #'basic.ack'{delivery_tag=DeliveryTag}),
     {noreply, NewState};
+
+%%%-------------------------------------------------------------------
+%%% Работа с процессами Cowboy
+%%%-------------------------------------------------------------------
+
 %% Обработка завершения процесса Cowboy
 handle_info({'DOWN', Ref, process, _Pid,_Reason}, S=#state{}) ->
     io:format("~nResponse: ~p",[erlang:localtime()]),
     NewState = delete_wait(Ref, S),
     {noreply, NewState};
+
+%%%-------------------------------------------------------------------
+%%% Работа с подключениями
+%%%-------------------------------------------------------------------
 %% Обработка завершения подключения
 handle_info({'EXIT', Conn0, _Reason},
             S=#state{dst_conn=Conn0, src_conn=Conn0})->
@@ -210,19 +243,31 @@ handle_info({'EXIT', Conn0, _Reason},
     consume(Ch, Config),
     {noreply, S#state{dst_conn=Conn,
                       publish_ch=Ch}};
+
+%%%-------------------------------------------------------------------
+%%% Работа с каналами
+%%%-------------------------------------------------------------------
 %% Обработка закрытия канала публишера
 handle_info({'EXIT', Ch, normal},
-            S=#state{publish_ch=Ch, dst_conn=Conn}) ->
+            S=#state{publish_ch=Ch, dst_conn=Conn,
+                    dst_config = #{decl_fun:=DF}}) ->
     {ok, NewCh} = make_publish_channel(Conn),
-    {noreply, S#state{publish_ch=NewCh}};
+    DF(NewCh),
+    {noreply, S#state{publish_ch=NewCh, current_delivery_tag=1}};
 
 %% Обработка закрытия канала консьюмера
 handle_info({'EXIT', Ch, normal},
             S=#state{consume_ch = Ch, src_conn = Conn,
-                    src_config = SrcConf}) ->
+                    src_config = SrcConf= #{decl_fun:=DF}}) ->
     {ok, NewCh} = make_consume_channel(Conn),
+    DF(NewCh),
     consume(NewCh, SrcConf),
     {noreply, S#state{consume_ch=NewCh}};
+
+%%%-------------------------------------------------------------------
+%%% Прочие сообщения
+%%%-------------------------------------------------------------------
+
 %% Прочие сообщения
 handle_info(_Info, S) ->
     io:format("~nUnknown message: ~p",[_Info]),
@@ -304,13 +349,6 @@ make_connections_and_channels(#{type:=async,
     {ok, Connection} = make_connection(<<"async">>, Name, VHost),
     {ok, DstCh} = make_publish_channel(Connection),
     {ok, Connection, DstCh, none, none}.
-
-
-
-
-declare(Channel, #{queue:=Queue})->
-    #'queue.declare_ok'{} =
-        amqp_channel:call(Channel, #'queue.declare'{queue=Queue}).
 
 %% Подписка на очередь
 consume(none,_)->

@@ -85,8 +85,11 @@ get_body(Req=#{method:=<<"GET">>}, _)->
     UKeys = [binary_to_atom(K,unicode)|| K <- UKeys0],
     QsMap = cowboy_req:match_qs(UKeys, Req),
     {ok, jsx:encode(QsMap), Req};
-get_body(Req, #{max_body_len:=Len}) ->
-    {ok, _, _} = cowboy_req:read_body(Req, #{length=>Len}).
+get_body(Req, #{max_body_length:=Len}) ->
+    {ok, _, _} = cowboy_req:read_body(Req, #{length=>Len});
+get_body(_Req, State ) ->
+    io:format("~nGet_body state: ~p",[State]).
+
 %% Запрос
 request(Method, Headers0, Body, State = #{name:=Name,
                                           responses:=Responses,

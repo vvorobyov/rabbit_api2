@@ -26,8 +26,7 @@ define PROJECT_ENV
             {timestamp_format, utc},
             {expiration, infinity},
             {timeout_response, {504, "TimeOut"}},
-            {bad_request_response, {400, "{\"reason\":\"Request is not valid json\"}"}},
-            {declarations, []}
+            {bad_request_response, {400, "{\"reason\":\"Request is not valid json\"}"}}
            ]},
 	{allowed, [{methods, [get, post, put, delete]},
              {timestamp_format, [utc, local]},
@@ -53,27 +52,30 @@ define PROJECT_ENV
                ]},
 	{handlers,[{handle1,[{type, sync},
                        {timestamp_format, local},
-                       %% {authorization, ["1e0a58af51ef9471c1a30773ea341392"]},
+                       {authorization, ["1e0a58af51ef9471c1a30773ea341392"]},
                        {content_type, <<"application/json">>},
-                       {methods, [get]},
+                       {methods, [get,post]},
                        {handle, "sync"},
                        {properties,[{delivery_mode,1}]},
                        {source, [{queue, <<"response">>},
-                                 {vhost, <<"/">>}]},
+                                 {vhost, <<"/">>},
+                                 {declarations, [{'queue.declare',[{queue,<<"response">>}]}]}]},
                        {destination, [{exchange, <<"">>},
-                                      {routing_key, <<"test_sync">>}]}
+                                      {routing_key, <<"test_sync">>},
+                                      {declarations, [{'queue.declare',[{queue,<<"test_sync">>}]}]}]}
                       ]},
              {handle2,[{type, async},
                        {timestamp_format, local},
                        {authorization, ["1e0a58af51ef9471c1a30773ea341392"]},
                        {content_type, <<"application/json">>},
-                       {methods, [get]},
+                       {methods, [get, post]},
                        {handle, "async"},
                        {properties,[{delivery_mode,1},
                                     {expiration, timeout}]},
                        {source, [{queue, <<"123">>}]},
                        {destination, [{exchange, <<"">>},
-                                      {routing_key, <<"test_async">>}]}
+                                      {routing_key, <<"test_async">>},
+                                      {declarations, [{'queue.declare',[{queue,<<"test_async">>}]}]}]}
                       ]}
             ]}
 

@@ -33,11 +33,6 @@
 %% @end
 %%--------------------------------------------------------------------
 start_link(Config) ->
-    io:format("~nTCP timeout: ~p~n",
-              [rabbit_api2_config:get_env_timeout(tcp_config)]),
-    io:format("~nTLS timeout: ~p~n",
-              [rabbit_api2_config:get_env_timeout(ssl_config)]),
-
     gen_server2:start_link({local, ?SERVER}, ?MODULE, Config, []).
 
 %%%===================================================================
@@ -167,7 +162,6 @@ start_listener(Listener, TimeOut, Config) ->
     ok.
 
 register_context(ContextName, Listener0, TimeOut, Config) ->
-    io:format("~nListener ~p config: ~p",[ContextName, Config]),
     Prefix0 = rabbit_api2_config:get_env_value(prefix, string),
     Prefix = parse_prefix(Prefix0),
     M0 = maps:from_list(Listener0),

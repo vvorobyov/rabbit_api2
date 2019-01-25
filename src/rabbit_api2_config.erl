@@ -101,8 +101,6 @@ parse_handler(Name, Config) when is_atom(Name) ->
             async ->
                 {ok, #{vhost=>none, queue=>none}}
         end,
-    Declarations0 = get_value(declarations, proplist, Config),
-    Declarations = parse_declarations(Declarations0),
     Handler = #{handle => Handle,
                 methods => Methods,
                 auth => Authorization,
@@ -118,22 +116,21 @@ parse_handler(Name, Config) when is_atom(Name) ->
            reconnect_delay => ReconnectDelay,
            handle_config => Handler,
            src_config => Source,
-           dst_config => Dest,
-           declarations => Declarations}};
+           dst_config => Dest}};
 parse_handler(_, _) ->
     throw({error, "Handler name is not atom"}).
 
-parse_declarations(Config)->
-    Config.
 
 parse_destination(DstConfig)->
     VHost = get_value(vhost, binary, "destination.", DstConfig),
     validate_vhost(VHost),
     Exchange = get_value(exchange, binary, "destination.", DstConfig),
     RoutingKey = get_value(routing_key, binary, "destination.", DstConfig),
+    DeclareFun=get_declarations(DstConfig),
     {ok,#{vhost => VHost,
           exchange => Exchange,
-          routing_key => RoutingKey}}.
+          routing_key => RoutingKey,
+          decl_fun => DeclareFun}}.
 
 parse_source(SrcConfig)->
     VHost = get_value(vhost, not_empty_binary, "source.", SrcConfig),
@@ -141,9 +138,46 @@ parse_source(SrcConfig)->
     Queue = get_value(queue, not_empty_binary, "source.", SrcConfig),
     PrefetchCount =
         get_value(prefetch_count, not_neg_integer, "source.", SrcConfig),
+    DeclareFun=get_declarations(SrcConfig),
     {ok, #{vhost => VHost,
            queue => Queue,
-           prefetch_count => PrefetchCount}}.
+           prefetch_count => PrefetchCount,
+           decl_fun => DeclareFun}}.
+
+get_declarations(Config)->
+    Declare0 = get_value(declarations, proplist, "destination.", Config,[]),
+    Declare1 = parse_declaration({Declare0,[]}),
+    fun (none)->ok;
+        (Ch) ->
+            [begin
+                 amqp_channel:call(Ch, M)
+             end || M <- lists:reverse(Declare1)]
+    end.
+
+parse_declaration({[], Acc}) ->
+    Acc;
+parse_declaration({[{Method, Props} | Rest], Acc}) when is_list(Props) ->
+    FieldNames = try rabbit_framing_amqp_0_9_1:method_fieldnames(Method)
+                 catch exit:Reason -> throw(Reason)
+                 end,
+    case proplists:get_keys(Props) -- FieldNames of
+        []            -> ok;
+        UnknownFields -> throw({unknown_fields, Method, UnknownFields})
+    end,
+    {Res, _Idx} = lists:foldl(
+                    fun (K, {R, Idx}) ->
+                            NewR = case proplists:get_value(K, Props) of
+                                       undefined -> R;
+                                       V         -> setelement(Idx, R, V)
+                                   end,
+                            {NewR, Idx + 1}
+                    end, {rabbit_framing_amqp_0_9_1:method_record(Method), 2},
+                    FieldNames),
+    parse_declaration({Rest, [Res | Acc]});
+parse_declaration({[{Method, Props} | _Rest], _Acc}) ->
+    throw({expected_method_field_list, Method, Props});
+parse_declaration({[Method | Rest], Acc}) ->
+    parse_declaration({[{Method, []} | Rest], Acc}).
 
 parse_properties(Props)->
     DeliveryMode = get_value(delivery_mode, not_neg_integer, Props),
@@ -165,6 +199,9 @@ get_value(Name, Type, Config)->
 
 get_value(Name, Type, Prefix, Config)->
     Default = get_default(Name),
+    get_value(Name, Type, Prefix, Config, Default).
+
+get_value(Name, Type, Prefix, Config, Default)->
     Allowed = get_allowed(Name),
     Value0 = case {Default, proplists:get_value(Name, Config)} of
                 {undefined,undefined} ->
