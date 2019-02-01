@@ -29,9 +29,8 @@ append({DeliveryTag, MessageId, From= {Pid, MRef}, Ref}, WaitList)
         true -> WaitList;
         false -> [{DeliveryTag, MessageId, From, Ref}|WaitList]
     end;
-append({D, M, F, R}, W) ->
-    io:format("~p ~p ~p ~p ~p",[D,M,F,W, R]),
-    throw({error, incorrect_parameters}).
+append(_, _) ->
+    throw({error, {rabbitmq_api2_wait_list, incorrect_parameters}}).
 
 delete(DeliveryTag, WaitList)
   when is_integer(DeliveryTag), is_list(WaitList) ->

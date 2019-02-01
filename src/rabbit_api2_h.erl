@@ -8,12 +8,9 @@
          accept_content/2,
          content_types_provided/2,
          forbidden/2,
-         content_types_accepted/2,
-        provide_content/2]).
+         content_types_accepted/2]).
 
 init(Req, State) ->
-    %% Проработать настройки по аналогии с
-    %% rabbit_mgmt_headers:set_common_permission_headers
     {cowboy_rest, Req, State}.
 
 variances(Req, State) ->
@@ -42,7 +39,7 @@ forbidden(Req,State)->
 
 %% предоставляемые типы данных
 content_types_provided(Req, State=#{content_type:=ContentType}) ->
-    {[{ContentType, provide_content}], Req, State}.
+    {[{ContentType, accept_content}], Req, State}.
 
 %% возвращаемые типы данных
 content_types_accepted(Req, State=#{content_type:=ContentType}) ->
@@ -50,20 +47,6 @@ content_types_accepted(Req, State=#{content_type:=ContentType}) ->
 %% возвращаемый контент
 accept_content(Req0 = #{method := Method},
                State = #{content_type := ContentType})->
-    io:format("~n~p AcceptContent",[self()]),
-    Headers = cowboy_req:headers(Req0),
-    {ok, ReqBody, Req1} = rabbit_api2_utils:get_body(Req0, State),
-    {ok, Status, ResHead, ResBody} =
-        rabbit_api2_utils:request(Method, Headers, ReqBody, State),
-    Req = cowboy_req:reply(Status,
-                           maps:merge(ResHead, #{<<"content-type">> => ContentType}),
-                           ResBody,
-                           Req1),
-    {stop, Req, State}.
-
-provide_content(Req0 = #{method := Method},
-               State = #{content_type := ContentType})->
-    io:format("~n~p ProvideContent",[self()]),
     Headers = cowboy_req:headers(Req0),
     {ok, ReqBody, Req1} = rabbit_api2_utils:get_body(Req0, State),
     {ok, Status, ResHead, ResBody} =

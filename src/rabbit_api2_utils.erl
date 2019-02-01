@@ -13,13 +13,25 @@
          is_authorized/2,
          is_forbidden/2,
          get_body/2,
-         request/4]).
+         request/4,
+         write_log/3]).
 -include_lib("amqp_client/include/amqp_client.hrl").
 
 
 %%%===================================================================
 %%% API
 %%%===================================================================
+%% Запись логов
+write_log(Type, String, Args)->
+    case Type of
+        error ->
+            rabbit_log:error(String, Args);
+        warning ->
+            rabbit_log:warning(String, Args);
+        _ ->
+            rabbit_log:info(String, Args)
+    end,
+    io:format("~n"++String, Args).
 
 %% Генерация хеша для авторизации средствами плагина
 gen_auth_hash(Username, Password)
@@ -86,9 +98,7 @@ get_body(Req=#{method:=<<"GET">>}, _)->
     QsMap = cowboy_req:match_qs(UKeys, Req),
     {ok, jsx:encode(QsMap), Req};
 get_body(Req, #{max_body_length:=Len}) ->
-    {ok, _, _} = cowboy_req:read_body(Req, #{length=>Len});
-get_body(_Req, State ) ->
-    io:format("~nGet_body state: ~p",[State]).
+    {ok, _, _} = cowboy_req:read_body(Req, #{length=>Len}).
 
 %% Запрос
 request(Method, Headers0, Body, State = #{name:=Name,
@@ -104,8 +114,7 @@ request(Method, Headers0, Body, State = #{name:=Name,
         Response = rabbit_api2_worker:request({global, Name}, AMQPMsg,
                                               TimeOut-500),
         case Response of
-            {publish_error, Reasone} ->
-                io:format("~nError reasone ~p",[Reasone]),
+            {publish_error, _} ->
                 get_response(publish_error_response, Responses);
             {ok, publish_ok} ->
                 get_response(async_response, Responses);
@@ -117,8 +126,7 @@ request(Method, Headers0, Body, State = #{name:=Name,
             get_response(timeout_response, Responses);
         _: not_valid_body ->
             get_response(bad_request_response, Responses);
-        _:Reasone2 ->
-            io:format("~n Error reasone ~p",[Reasone2]),
+        _:_ ->
             get_response(internal_error_response, Responses)
     end.
 

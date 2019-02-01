@@ -30,7 +30,6 @@
 start_link() ->
     case rabbit_api2_config:parse_handlers() of
         {ok, Configuration} ->
-            %% io:format("~n~p", [Configuration]),
             supervisor2:start_link(
               {local, ?MODULE}, ?MODULE, [Configuration]
              );

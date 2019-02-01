@@ -9,6 +9,7 @@
 -module(rabbit_api2_config).
 %% API
 -export([parse_handlers/0,
+	 parse_handler/2,
          get_env_value/2,
          get_env_timeout/1]).
 
@@ -68,6 +69,14 @@ parse_handlers(Handlers=[{Name, _}| Rest], Acc)->
                                  [Name,Reason])})
     end.
 
+parse_handler(Name0, Config) when is_binary(Name0)->
+    Name=erlang:binary_to_atom(Name0, unicode),
+    try
+	parse_handler(Name, Config)
+    catch
+	throw:{error, Reason} ->
+	    throw({error, Reason, []})
+    end;
 parse_handler(Name, Config) when is_atom(Name) ->
     Handle = get_value(handle, string, Config),
     Methods = get_value(methods, {list,atom}, Config),
@@ -223,11 +232,11 @@ get_value(Name, Type, Prefix, Config, Default)->
     convert(Name, Value).
 
 get_default(Name)->
-    {ok, DefValues} = application:get_env(default),
+    {ok, DefValues} = application:get_env(rabbitmq_api2, default),
     proplists:get_value(Name, DefValues).
 
 get_allowed(Name)->
-    {ok, AllowedValues} = application:get_env(allowed),
+    {ok, AllowedValues} = application:get_env(rabbitmq_api2, allowed),
     proplists:get_value(Name, AllowedValues).
 %%%-------------------------------------------------------------------
 %%% Conver Functions
@@ -388,7 +397,7 @@ is_auth2([Value|Rest])->
                         io_lib:format(
                           "Expected 'rabbitmq_auth' or list of string(-s)"
                           " with hashes. Use ~p for generate it",
-                          ["rabbitmqctl eval 'rabbitmq_api2:gen_hash"
+                          ["rabbitmqctl eval 'rabbitmq_api2:gen_auth_hash"
                            "(USERNAME, PASSWORD).'"])})
     end;
 is_auth2(_) ->
@@ -396,7 +405,7 @@ is_auth2(_) ->
            io_lib:format(
              "Expected 'rabbitmq_auth' or list of string(-s)"
              " with hashes. Use ~p for generate it",
-             ["rabbitmqctl eval 'rabbitmq_api2:gen_hash"
+             ["rabbitmqctl eval 'rabbitmq_api2:gen_auth_hash"
               "(USERNAME, PASSWORD).'"])}).
 
 is_response({Status, Body})

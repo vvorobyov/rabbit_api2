@@ -53,47 +53,45 @@ init(Config=#{name:=Name,
               dst_config:=DstConfig,
               src_config:=SrcConfig}) ->
     try
-    process_flag(trap_exit, true),
-    {ok, DstConn, DstCh, SrcConn, SrcCh} =
-        make_connections_and_channels(Config),
-    case maps:find(decl_fun, DstConfig) of
-        {ok, Fun} -> Fun(DstCh);
-        _ -> ok
-    end,
-    case maps:find(decl_fun, SrcConfig) of
-        {ok, Fun2} -> Fun2(SrcCh);
-        _ -> ok
-    end,
-    consume(SrcCh, SrcConfig),
-    io:format("~n~nWorker: ~p ~p"
-              "~nPublish connection: ~p"
-              "~nPublish channel: ~p"
-              "~nConsum connection: ~p"
-              "~nConsum channel: ~p",
-              [Name,self(),DstConn, DstCh, SrcConn, SrcCh]),
-    {ok, #state{
-            name=Name,
-            type=Type,
-            dst_conn=DstConn,
-            src_conn=SrcConn,
-            publish_ch=DstCh,
-            consume_ch=SrcCh,
-            dst_config=DstConfig,
-            src_config=SrcConfig,
-            wait_response= rabbit_api2_waitlist:empty()}}
+        process_flag(trap_exit, true),
+        {ok, DstConn, DstCh, SrcConn, SrcCh} =
+            make_connections_and_channels(Config),
+        case maps:find(decl_fun, DstConfig) of
+            {ok, Fun} -> Fun(DstCh);
+            _ -> ok
+        end,
+        case maps:find(decl_fun, SrcConfig) of
+            {ok, Fun2} -> Fun2(SrcCh);
+            _ -> ok
+        end,
+        consume(SrcCh, SrcConfig),
+        rabbit_api2_utils:write_log(info,
+                                    "RabbitMQ APIv2.0 plugin "
+                                    "start ~p '~p' handler worker process: "
+                                    "~n    Destination connection PID: ~p"
+                                    "~n    Destination channel PID: ~p"
+                                    "~n    Source connection PID: ~p"
+                                    "~n    Source channel PID: ~p",
+                                    [Type, Name,DstConn, DstCh, SrcConn, SrcCh]),
+        {ok, #state{
+                name=Name,
+                type=Type,
+                dst_conn=DstConn,
+                src_conn=SrcConn,
+                publish_ch=DstCh,
+                consume_ch=SrcCh,
+                dst_config=DstConfig,
+                src_config=SrcConfig,
+                wait_response= rabbit_api2_waitlist:empty()}}
     catch
         {error, Reason}->
-            Error = io_lib:format("Error start '~p' with reason: ~s",[Name,
-              Reason]),
+            Error = io_lib:format("Error start '~p' with reason: ~s",
+                                  [Name, Reason]),
             {stop, binary_to_list(iolist_to_binary(Error))}
-    end;
-init(Conf) ->
-    io:format("~nConf: ~p", [Conf]).
+    end.
 
 
 handle_call({request, Msg}, From, S=#state{}) ->
-    io:format("~nWorker PID: ~p", [self()]),
-    io:format("~nRequest: ~p",[erlang:localtime()]),
     MessageID = publish_message(S#state.publish_ch,
                                 Msg, S#state.dst_config),
     NewState = append_wait(MessageID, From, S),
@@ -107,40 +105,9 @@ handle_cast(_Request, State) ->
 
     {noreply, State}.
 
-
-%%%-------------------------------------------------------------------
-%%% Работа с подпиской
-%%%-------------------------------------------------------------------
-
-%% Успешная подписка на очередь
-handle_info(#'basic.consume_ok'{consumer_tag=ConsTag},S) ->
-    io:format("~nConsum Tag: ~p", [ConsTag]),
-    {noreply, S#state{consumer_tag=ConsTag}};
-%% Отписка от очереди (может возникнуть в случае удаления очереди)
-handle_info(#'basic.cancel'{consumer_tag=ConsTag},
-            S = #state{consumer_tag=ConsTag,
-                       src_config = SrcConf=#{decl_fun:=DF},
-                       consume_ch =Ch})->
-    io:format("~n CONSUME CANCELED: ~p",[S]),
-    DF(Ch),
-    io:format("~n QUEUE DECLARE"),
-%    amqp_channel:cast(Ch, #'basic.cancel'{consumer_tag=ConsTag}),
-    io:format("~n CONSUME CANCEL:",[]),
-    consume(Ch, SrcConf),
-    io:format("~n NEW CONSUME"),
-    {noreply, S};
-
 %%%-------------------------------------------------------------------
 %%% Работа с сообщениями
 %%%-------------------------------------------------------------------
-%% Ошибка маршрутизации сообщения
-handle_info({#'basic.return'{reply_text = Reason},
-             #amqp_msg{props=#'P_basic'{message_id=MessageId}}},
-            S=#state{}) ->
-    {From} = rabbit_api2_waitlist:get([from], MessageId, S#state.wait_response),
-    gen_server2:reply(From, {publish_error, Reason}),
-    NewState=delete_wait(MessageId, S),
-    {noreply, NewState};
 %% Успешная публикация сообщения
 handle_info(#'basic.ack'{delivery_tag = DeliveryTag},
             S=#state{}) ->
@@ -154,16 +121,6 @@ handle_info(#'basic.ack'{delivery_tag = DeliveryTag},
         {async, {From}} ->
             gen_server2:reply(From, {ok, publish_ok}),
             {noreply, delete_wait(DeliveryTag, S)}
-    end;
-%% Ошибка публикации сообщения
-handle_info(#'basic.nack'{delivery_tag=DeliveryTag},
-            S=#state{wait_response=WaitList}) ->
-    case rabbit_api2_waitlist:get([from], DeliveryTag, WaitList) of
-        {false} -> {noreply, S};
-        {From} ->
-            gen_server2:reply(From, {publish_error, noack}),
-            NewState=delete_wait(DeliveryTag, S),
-            {noreply, NewState}
     end;
 %% Получение сообщения из очереди
 handle_info({#'basic.deliver'{consumer_tag=ConsTag,
@@ -188,6 +145,43 @@ handle_info({#'basic.deliver'{consumer_tag=ConsTag,
     amqp_channel:cast(S#state.consume_ch,
                       #'basic.ack'{delivery_tag=DeliveryTag}),
     {noreply, NewState};
+%% Ошибка маршрутизации сообщения
+handle_info({#'basic.return'{reply_text = Reason},
+             #amqp_msg{props=#'P_basic'{message_id=MessageId}}},
+            S=#state{}) ->
+    {From} = rabbit_api2_waitlist:get([from], MessageId, S#state.wait_response),
+    gen_server2:reply(From, {publish_error, Reason}),
+    NewState=delete_wait(MessageId, S),
+    {noreply, NewState};
+%% Ошибка публикации сообщения
+handle_info(#'basic.nack'{delivery_tag=DeliveryTag},
+            S=#state{wait_response=WaitList}) ->
+    case rabbit_api2_waitlist:get([from], DeliveryTag, WaitList) of
+        {false} -> {noreply, S};
+        {From} ->
+            gen_server2:reply(From, {publish_error, noack}),
+            NewState=delete_wait(DeliveryTag, S),
+            {noreply, NewState}
+    end;
+
+%%%-------------------------------------------------------------------
+%%% Работа с подпиской
+%%%-------------------------------------------------------------------
+
+%% Успешная подписка на очередь
+handle_info(#'basic.consume_ok'{consumer_tag=ConsTag},S) ->
+    %rabbit_log:info("Consume ok"),
+    {noreply, S#state{consumer_tag=ConsTag}};
+%% Отписка от очереди (может возникнуть в случае удаления очереди)
+handle_info(#'basic.cancel'{consumer_tag=ConsTag},
+            S = #state{consumer_tag=ConsTag,
+                       src_config = SrcConf=#{decl_fun:=DF},
+                       consume_ch =Ch})->
+    %rabbit_log:info("Consume canceled"),
+    DF(Ch), % Декларирование очередей
+    consume(Ch, SrcConf),
+    {noreply, S};
+
 
 %%%-------------------------------------------------------------------
 %%% Работа с процессами Cowboy
@@ -195,7 +189,6 @@ handle_info({#'basic.deliver'{consumer_tag=ConsTag,
 
 %% Обработка завершения процесса Cowboy
 handle_info({'DOWN', Ref, process, _Pid,_Reason}, S=#state{}) ->
-    io:format("~nResponse: ~p",[erlang:localtime()]),
     NewState = delete_wait(Ref, S),
     {noreply, NewState};
 
@@ -203,44 +196,96 @@ handle_info({'DOWN', Ref, process, _Pid,_Reason}, S=#state{}) ->
 %%% Работа с подключениями
 %%%-------------------------------------------------------------------
 %% Обработка завершения подключения
-handle_info({'EXIT', Conn0, _Reason},
-            S=#state{dst_conn=Conn0, src_conn=Conn0})->
+handle_info({'EXIT', Conn0, Reason},
+            S=#state{dst_conn=Conn0, src_conn=Conn0, name=Name})->
+    rabbit_api2_utils:write_log(
+      error,
+      "RabbitMQ APIv2.0 Sync handler '~p'. "
+      "Closed sync connection (~p) with reason:~n    ~p",
+      [Name, Conn0, Reason]),
     {ok, Conn, DstCh, Conn, SrcCh} =
         make_connections_and_channels(#{name=>S#state.name,
                                         type=>S#state.type,
                                         dst_config=>S#state.dst_config,
                                         src_config=>S#state.src_config}),
+    rabbit_api2_utils:write_log(
+      info,
+      "RabbitMQ APIv2.0 Sync handler '~p'."
+      "Restart connections and channels: "
+      "~n    Destination & Source connection PID: ~p"
+      "~n    Destination channel PID: ~p"
+      "~n    Source connection PID: ~p",
+      [Name, Conn, DstCh, SrcCh]),
     {noreply,S#state{dst_conn=Conn,
                      publish_ch=DstCh,
                      src_conn=Conn,
-                     consume_ch=SrcCh}};
+                     consume_ch=SrcCh,
+                     current_delivery_tag = 1}};
 %% Обработка завершения подключения публишера
-handle_info({'EXIT', Conn0, _Reason},
+handle_info({'EXIT', Conn0, Reason},
             S=#state{name=Name,
                      type=async,
                      dst_conn=Conn0,
                      dst_config=#{vhost:=VHost}}) ->
+    rabbit_api2_utils:write_log(
+      error,
+      "RabbitMQ APIv2.0 Async handler '~p'. "
+      "Closed connection (~p) with reason:~n    ~p",
+      [Name, Conn0, Reason]),
     {ok, Conn} = make_connection(<<"async">>, Name, VHost),
     {ok, Ch} = make_publish_channel(Conn),
+    rabbit_api2_utils:write_log(
+      info,
+      "RabbitMQ APIv2.0 Async handler '~p'."
+      "Restart connection and channel: "
+      "~n    Destination connection PID: ~p"
+      "~n    Destination channel PID: ~p",
+      [Name, Conn, Ch]),
     {noreply, S#state{dst_conn=Conn,
-                      publish_ch=Ch}};
-handle_info({'EXIT', Conn0, _Reason},
+                      publish_ch=Ch,
+                      current_delivery_tag = 1}};
+handle_info({'EXIT', Conn0, Reason},
             S=#state{name=Name,
                      type=sync,
                      dst_conn=Conn0,
                      dst_config=#{vhost:=VHost}}) ->
+    rabbit_api2_utils:write_log(
+      error,
+      "RabbitMQ APIv2.0 Sync handler '~p'. "
+      "Closed destination connection (~p) with reason:~n    ~p",
+      [Name, Conn0, Reason]),
     {ok, Conn} = make_connection(<<"Publisher">>, Name, VHost),
     {ok, Ch} = make_publish_channel(Conn),
+    rabbit_api2_utils:write_log(
+      info,
+      "RabbitMQ APIv2.0 Sync handler '~p'."
+      "Restart destination connection and channel: "
+      "~n    Destination connection PID: ~p"
+      "~n    Destination channel PID: ~p",
+      [Name, Conn, Ch]),
     {noreply, S#state{dst_conn=Conn,
-                      publish_ch=Ch}};
+                      publish_ch=Ch,
+                      current_delivery_tag = 1}};
 %% Обработка завершения подключения консьюмера
-handle_info({'EXIT', Conn0, _Reason},
+handle_info({'EXIT', Conn0, Reason},
             S=#state{name = Name,
                      src_conn=Conn0,
                      src_config=Config=#{vhost:=VHost}}) ->
+    rabbit_api2_utils:write_log(
+      error,
+      "RabbitMQ APIv2.0 Sync handler '~p'. "
+      "Closed source connection (~p) with reason:~n    ~p",
+      [Name, Conn0, Reason]),
     {ok, Conn} = make_connection(<<"Consumer">>,Name, VHost),
     {ok, Ch} = make_consume_channel(Conn),
     consume(Ch, Config),
+    rabbit_api2_utils:write_log(
+      info,
+      "RabbitMQ APIv2.0 Sync handler '~p'."
+      "Restart source connection and channel: "
+      "~n    Source connection PID: ~p"
+      "~n    Source channel PID: ~p",
+      [Name, Conn, Ch]),
     {noreply, S#state{dst_conn=Conn,
                       publish_ch=Ch}};
 
@@ -248,32 +293,68 @@ handle_info({'EXIT', Conn0, _Reason},
 %%% Работа с каналами
 %%%-------------------------------------------------------------------
 %% Обработка закрытия канала публишера
-handle_info({'EXIT', Ch, normal},
-            S=#state{publish_ch=Ch, dst_conn=Conn,
-                    dst_config = #{decl_fun:=DF}}) ->
-    {ok, NewCh} = make_publish_channel(Conn),
-    DF(NewCh),
+handle_info({'EXIT', Ch, Reason},
+            S=#state{name=Name, publish_ch=Ch, dst_conn=Conn,
+		     dst_config = #{decl_fun:=DF}}) ->
+    rabbit_api2_utils:write_log(
+      error,
+      "RabbitMQ APIv2.0. Handler '~p'. "
+      "Destination channel closed with reasone:~n~p",
+      [Name, Reason]),
+    NewCh = try
+                {ok, Ch0} = make_publish_channel(Conn),
+                DF(Ch0),
+		rabbit_api2_utils:write_log(
+		  error,
+		  "RabbitMQ APIv2.0. Handler '~p'. "
+		  "Start destination channel with PID: ~p",
+		  [Name, Ch0]),
+                Ch0    
+            catch
+                _:_ -> none
+            end,
     {noreply, S#state{publish_ch=NewCh, current_delivery_tag=1}};
-
 %% Обработка закрытия канала консьюмера
-handle_info({'EXIT', Ch, normal},
-            S=#state{consume_ch = Ch, src_conn = Conn,
+handle_info({'EXIT', Ch, Reason},
+            S=#state{name=Name, consume_ch = Ch, src_conn = Conn,
                     src_config = SrcConf= #{decl_fun:=DF}}) ->
-    {ok, NewCh} = make_consume_channel(Conn),
-    DF(NewCh),
-    consume(NewCh, SrcConf),
+    rabbit_api2_utils:write_log(
+      error,
+      "RabbitMQ APIv2.0. Handler '~p'. "
+      "Source channel closed with reasone:~n~p",
+      [Name, Reason]),
+    NewCh = try
+                {ok, Ch0} = make_consume_channel(Conn),
+                DF(Ch0),
+                consume(Ch0, SrcConf),
+		rabbit_api2_utils:write_log(
+		  info,
+		  "RabbitMQ APIv2.0. Handler '~p'. "
+		  "Start source channel with PID: ~p",
+		  [Name, Ch0]),
+                Ch0
+            catch
+                _:_ -> none
+            end,
     {noreply, S#state{consume_ch=NewCh}};
 
 %%%-------------------------------------------------------------------
 %%% Прочие сообщения
 %%%-------------------------------------------------------------------
-
 %% Прочие сообщения
-handle_info(_Info, S) ->
-    io:format("~nUnknown message: ~p",[_Info]),
+handle_info(Info, S=#state{name=Name}) ->
+    rabbit_api2_utils:write_log(
+      error,
+      "RabbitMQ APIv2.0. Handler '~p'. "
+      "Unknown message:~n~p",
+      [Name, Info]),
     {noreply, S}.
 
-terminate(_Reason, State) ->
+terminate(Reason, State = #state{name=Name}) ->
+    rabbit_api2_utils:write_log(
+      warning,
+      "RabbitMQ APIv2.0. Handler '~p' terminate with reason:~n~p",
+      [Name, Reason]),
     close_channels(State),
     close_connections(State),
     ok.
@@ -287,13 +368,15 @@ format_status(_Opt, Status) ->
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
-
 %%%-------------------------------------------------------------------
 %%% Change State Functions
 %%%-------------------------------------------------------------------
-append_wait(MessageID, From = {Pid, _}, S)->
+append_wait(MessageID, From = {Pid, _}, S=#state{type=Type})->
     DeliveryTag = S#state.current_delivery_tag,
-    Ref = erlang:monitor(process, Pid),
+    Ref = case Type of
+              sync -> erlang:monitor(process, Pid);
+              async -> erlang:make_ref()
+          end,
     WaitList = rabbit_api2_waitlist:append(
                  {DeliveryTag, MessageID, From, Ref},
                  S#state.wait_response),
@@ -327,7 +410,6 @@ publish_message(Channel,
 %% Открытие подключений и каналов
 make_connections_and_channels(#{type:=sync,
                                 name := Name,
-                                declarations := _Declarations,
                                 dst_config := #{vhost:=VHost},
                                 src_config := #{vhost:=VHost}})->
     {ok, Connection} = make_connection(<<"sync">>, Name, VHost),
